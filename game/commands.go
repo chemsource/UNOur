@@ -2,9 +2,107 @@ package game
 
 import "time"
 
-func (g *Game) start(s *state, e Effects, events *[]Event) error {
+func (g *Game) validateAction(s *state, idx int, cmd Command, card Card, e Effects) error {
+	switch cmd.Type {
+	case Start:
+		return g.validateStart(e)
+	case Play:
+		_, err := validatePlay(s, cmd, card, e)
+		return err
+	case Draw:
+		return validateDrawTurn(s)
+	case Pass:
+		if s.drawnCard == 0 {
+			return fail(InvalidState, "draw a card before passing")
+		}
+	case Challenge:
+		return validateChallenge(s, idx, e)
+	case SayUNO, PenalizeUNO:
+		return validateUNO(s, idx, cmd)
+	default:
+		return fail(InvalidInput, "unknown action %q", cmd.Type)
+	}
+	return nil
+}
+
+func (g *Game) validateStart(e Effects) error {
 	if e.HandLimit > 0 && g.initialHand >= e.HandLimit {
 		return fail(InvalidInput, "hand limit must exceed the initial hand size")
+	}
+	return nil
+}
+
+func validatePlay(s *state, cmd Command, card Card, e Effects) (Color, error) {
+	if !e.Allow {
+		return "", fail(CardNotPlayable, "card does not match or cannot answer the penalty")
+	}
+	chosen := s.active
+	if card.IsWild() {
+		if cmd.Color == KeepColor && e.KeepColor {
+			chosen = s.active
+		} else if cmd.Color.Valid() {
+			chosen = cmd.Color
+		} else {
+			return "", fail(InvalidInput, "wild card requires a valid chosen color")
+		}
+		if card.Kind == WildDrawFour && !e.AllowChallenge && (Context{s: s}).HasColor(cmd.PlayerID, s.active) {
+			return "", fail(CardNotPlayable, "+4 cannot be played while holding the current color without the challenge rule")
+		}
+	} else {
+		if cmd.Color != "" {
+			return "", fail(InvalidInput, "a chosen color is only valid for a wild card")
+		}
+		chosen = card.Color
+	}
+	if s.pending+e.AddPenalty > 108 {
+		return "", fail(RuleViolation, "penalty pool exceeds the deck size")
+	}
+	return chosen, nil
+}
+
+func validateDrawTurn(s *state) error {
+	if s.pending == 0 && s.drawnCard != 0 {
+		return fail(InvalidState, "already drew this turn; play that card or pass")
+	}
+	return nil
+}
+
+func validateChallenge(s *state, idx int, e Effects) error {
+	if !e.AllowChallenge || s.challenge == nil || s.pending == 0 {
+		return fail(InvalidState, "there is no +4 challenge available")
+	}
+	if s.index(s.challenge.offender) < 0 {
+		return fail(InternalFailure, "challenge target is missing")
+	}
+	return nil
+}
+
+func validateUNO(s *state, idx int, cmd Command) error {
+	p := &s.players[idx]
+	if p.uno == nil || p.uno.ID != cmd.WindowID || cmd.WindowID == 0 {
+		return fail(UNOWindowInvalid, "UNO window is stale or already resolved")
+	}
+	if cmd.Type == SayUNO {
+		if !cmd.At.Before(p.uno.Deadline) {
+			return fail(UNOExpired, "UNO declaration deadline has passed")
+		}
+		return nil
+	}
+	if cmd.Type != PenalizeUNO {
+		return fail(InvalidInput, "unknown action %q", cmd.Type)
+	}
+	if cmd.At.Before(p.uno.Deadline) {
+		return fail(UNOTooEarly, "UNO penalty is only valid after the two-second deadline")
+	}
+	if len(s.draw) == 0 && len(s.discard) <= 1 {
+		return fail(InvalidState, "no physical card is currently available for the UNO penalty")
+	}
+	return nil
+}
+
+func (g *Game) start(s *state, e Effects, events *[]Event) error {
+	if err := g.validateStart(e); err != nil {
+		return err
 	}
 	deck := StandardDeck()
 	if err := g.shuffle(deck); err != nil {
@@ -42,29 +140,9 @@ func (g *Game) start(s *state, e Effects, events *[]Event) error {
 }
 
 func (g *Game) play(s *state, idx, cardIndex int, cmd Command, card Card, e Effects, events *[]Event) error {
-	if !e.Allow {
-		return fail(CardNotPlayable, "card does not match or cannot answer the penalty")
-	}
-	chosen := s.active
-	if card.IsWild() {
-		if cmd.Color == KeepColor && e.KeepColor {
-			chosen = s.active
-		} else if cmd.Color.Valid() {
-			chosen = cmd.Color
-		} else {
-			return fail(InvalidInput, "wild card requires a valid chosen color")
-		}
-		if card.Kind == WildDrawFour && !e.AllowChallenge && (Context{s: s}).HasColor(cmd.PlayerID, s.active) {
-			return fail(CardNotPlayable, "+4 cannot be played while holding the current color without the challenge rule")
-		}
-	} else {
-		if cmd.Color != "" {
-			return fail(InvalidInput, "a chosen color is only valid for a wild card")
-		}
-		chosen = card.Color
-	}
-	if s.pending+e.AddPenalty > 108 {
-		return fail(RuleViolation, "penalty pool exceeds the deck size")
+	chosen, err := validatePlay(s, cmd, card, e)
+	if err != nil {
+		return err
 	}
 	var challenge *challengeWindow
 	if card.Kind == WildDrawFour && e.AllowChallenge && e.AddPenalty > 0 {
@@ -72,7 +150,7 @@ func (g *Game) play(s *state, idx, cardIndex int, cmd Command, card Card, e Effe
 	}
 	s.cancelUNO(idx)
 	p := &s.players[idx]
-	p.hand = append(p.hand[:cardIndex], p.hand[cardIndex+1:]...)
+	p.hand = append(p.hand[:cardIndex:cardIndex], p.hand[cardIndex+1:]...)
 	s.discard = append(s.discard, card)
 	s.active = chosen
 	s.challenge = challenge
@@ -124,6 +202,9 @@ func (g *Game) drawCards(s *state, idx, count int, events *[]Event) (int, error)
 }
 
 func (g *Game) drawTurn(s *state, idx int, e Effects, events *[]Event) error {
+	if err := validateDrawTurn(s); err != nil {
+		return err
+	}
 	if s.pending > 0 {
 		if _, err := g.drawCards(s, idx, s.pending, events); err != nil {
 			return err
@@ -133,9 +214,6 @@ func (g *Game) drawTurn(s *state, idx int, e Effects, events *[]Event) error {
 		s.challenge = nil
 		s.advance(1)
 		return nil
-	}
-	if s.drawnCard != 0 {
-		return fail(InvalidState, "already drew this turn; play that card or pass")
 	}
 	n, err := g.drawCards(s, idx, 1, events)
 	if err != nil {
@@ -151,13 +229,10 @@ func (g *Game) drawTurn(s *state, idx int, e Effects, events *[]Event) error {
 }
 
 func (g *Game) challenge(s *state, idx int, e Effects, events *[]Event) error {
-	if !e.AllowChallenge || s.challenge == nil || s.pending == 0 {
-		return fail(InvalidState, "there is no +4 challenge available")
+	if err := validateChallenge(s, idx, e); err != nil {
+		return err
 	}
 	target := s.index(s.challenge.offender)
-	if target < 0 {
-		return fail(InternalFailure, "challenge target is missing")
-	}
 	if s.challenge.hadColor {
 		if _, err := g.drawCards(s, target, s.pending, events); err != nil {
 			return err
@@ -179,20 +254,14 @@ func (g *Game) challenge(s *state, idx int, e Effects, events *[]Event) error {
 }
 
 func (g *Game) uno(s *state, idx int, cmd Command, events *[]Event) error {
-	p := &s.players[idx]
-	if p.uno == nil || p.uno.ID != cmd.WindowID || cmd.WindowID == 0 {
-		return fail(UNOWindowInvalid, "UNO window is stale or already resolved")
+	if err := validateUNO(s, idx, cmd); err != nil {
+		return err
 	}
+	p := &s.players[idx]
 	windowID := p.uno.ID
 	if cmd.Type == SayUNO {
-		if !cmd.At.Before(p.uno.Deadline) {
-			return fail(UNOExpired, "UNO declaration deadline has passed")
-		}
 		*events = append(*events, Event{Type: "uno_declared", PlayerID: p.id})
 	} else {
-		if cmd.At.Before(p.uno.Deadline) {
-			return fail(UNOTooEarly, "UNO penalty is only valid after the two-second deadline")
-		}
 		n, err := g.drawCards(s, idx, 1, events)
 		if err != nil {
 			return err

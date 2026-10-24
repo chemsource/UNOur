@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"unour/game"
+	"unour/internal/account"
 	"unour/internal/room"
 )
 
@@ -79,6 +80,25 @@ func (h *handler) problem(w http.ResponseWriter, status int, code, message strin
 }
 
 func (h *handler) failure(w http.ResponseWriter, r *http.Request, err error) {
+	var auth *account.Error
+	if errors.As(err, &auth) {
+		status := 400
+		switch auth.Code {
+		case "account_unauthorized", "invalid_credentials":
+			status = 401
+		case "username_taken":
+			status = 409
+		case "account_not_found", "avatar_not_found":
+			status = 404
+		case "avatar_too_large":
+			status = 413
+		case "avatar_busy":
+			status = 503
+			w.Header().Set("Retry-After", "2")
+		}
+		h.problem(w, status, auth.Code, auth.Message)
+		return
+	}
 	var domain *game.Error
 	if errors.As(err, &domain) {
 		status := 409

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"unour/game"
+	"unour/internal/bot"
 )
 
 type Error struct {
@@ -31,8 +32,13 @@ type Record struct {
 	Game      *game.Game
 	HostID    game.PlayerID
 	Sessions  map[[32]byte]game.PlayerID
+	Accounts  map[string]game.PlayerID
 	Rules     []game.RuleSpec
 	CreatedAt time.Time
+	Bots      map[game.PlayerID]bot.Profile
+	BotMemory bot.Memory
+	BotTurnAt time.Time
+	BotUNO    map[game.PlayerID]BotUNO
 }
 
 // Store serializes write callbacks for a room within this process. The callback

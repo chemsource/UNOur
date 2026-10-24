@@ -1,12 +1,15 @@
 # 架构、规则扩展与资源边界
 
 ```text
-cmd/server                 组合根、HTTP 生命周期、清理定时器
+cmd/server                 组合根、HTTP 生命周期、后台任务
     ├── internal/httpapi   REST DTO/严格解析/CORS/错误映射
-    │       └── room 用例接口
+    │       └── room / account 用例接口
     ├── internal/room      房间/会话/权限/时钟/存储端口
     │       └── game      命令与游戏规则
-    ├── internal/store/sqlite → room.Store（默认）
+    ├── internal/account   身份/凭证/会话/头像/存储端口
+    ├── internal/bot       公开观察/隐藏信息采样/搜索策略
+    ├── internal/botrunner 到期队列/有界计算/版本校验提交
+    ├── internal/store/sqlite → room.Store + account.Store（默认）
     └── internal/store/memory → room.Store（测试/嵌入）
 
 examples/rules → game 的公开规则协议
@@ -50,7 +53,7 @@ service, err := room.New(store, room.Config{Registry: registry})
 
 出牌从两张变成一张时，生成以该次提交版本为 ID 的窗口和服务器时间 +2 秒期限。声明和处罚均以本人的会话身份执行，不接受目标玩家参数。窗口记录保留最近的完成类型：同操作同窗口重复请求无副作用；声明与罚牌相互排斥。
 
-UNO 处罚不调用正常的 drawTurn，因此不改变当前回合或罚牌池。手牌因其他操作变化会取消旧窗口，结束比赛会关闭所有窗口。前端负责两秒交互与超时上报，后端不部署每玩家计时 goroutine。客户端漏报就不会自动补罚；若以后改为服务端权威定时罚牌，可在房间用例层新增统一调度，仍调用同一个领域命令。
+UNO 处罚不调用正常的 drawTurn，因此不改变当前回合或罚牌池。手牌因其他操作变化会取消旧窗口，结束比赛会关闭所有窗口。真人由前端负责两秒交互与超时上报，客户端漏报不会自动补罚。电脑的声明与漏喊由统一的持久化队列处理，仍调用同一个领域命令；不为每位玩家创建计时 goroutine。
 
 ## 房间与存储
 
@@ -76,14 +79,32 @@ generation 是创建时的随机身份，revision 是存储修订号，独立于
 
 清理按最后成功写入时间查询，并通过 generation/revision/时间条件删除。本进程正在执行写回调的房间会跳过；其他进程与清理冲突时由 CAS 阻止旧数据复活。TTL 默认为 0，不启动自动清理。显式开启 TTL 后，读取不续期，停机时间计入期限。
 
-数据库 PRAGMA user_version 当前为 1；初始化 schema 在事务中执行，未知高版本拒绝启动。启动扫描并校验现存快照。文件权限为 0600，新建目录为 0700。此适配器支持本地文件部署；未来切换服务型数据库可复用 RecordCodec 与 Store.Read/Transact 边界，并实现相应的事务与冲突控制。
+数据库 PRAGMA user_version 当前为 3；初始化 schema 在事务中执行，未知高版本拒绝启动。启动扫描并校验现存快照和电脑调度投影。文件权限为 0600，新建目录为 0700。此适配器支持本地文件部署；未来切换服务型数据库可复用 RecordCodec 与 Store.Read/Transact 边界，并实现相应的事务与冲突控制。
 
 连接与 WAL 的依据参见 [go-sqlite3](https://github.com/mattn/go-sqlite3)、[SQLite WAL](https://www.sqlite.org/wal.html)、[SQLite 事务](https://www.sqlite.org/lang_transaction.html)。
 
 ## 网络与部署
 
-HTTP 适配器依赖 Rooms 用例接口。未来 WebSocket、RPC、机器人驱动都应依赖同一用例/领域命令，并返回按玩家过滤的 View。当前 REST 客户端通过 GET 状态同步，响应中的事件不是持久化消息队列。
+HTTP 适配器依赖 Rooms 用例接口。电脑调度同样通过房间用例调用领域命令；未来 WebSocket、RPC 也应沿用此边界，并返回按玩家过滤的 View。当前 REST 客户端通过 GET 状态同步，响应中的事件不是持久化消息队列。
 
-默认启动一个进程。日志记录 method/path/status/duration，不记录 Authorization 或请求体。CORS 允许来源显式配置，认证使用房间隔离的随机 Bearer token；没有外部用户账号、邀请口令或房间列表。房主身份由首次成功加入确定。
+默认启动一个进程。日志记录 method/path/status/duration，不记录 Authorization、Cookie 或请求体。CORS 允许来源显式配置，账户使用 HttpOnly Cookie，房间还需要隔离的随机 Bearer token。普通房间由首次加入者主持；人机房创建、真人入座、电脑入座和开局原子完成，真人始终为房主。
 
-对公网开放时，可在反向代理层接入 TLS、连接/请求速率限制，再按产品需要添加账号认证或房间邀请策略；这些机制可以放在适配器/房间用例边界，不改变 UNO 核心。
+对公网开放时，可在反向代理层接入 TLS、连接/请求速率限制，再按产品需要添加房间邀请策略；这些机制放在适配器/房间用例边界，不改变 UNO 核心。
+
+## 电脑决策与后台调度
+
+`internal/bot` 只能接收 `Observation`：按本人过滤的 `game.View`、公开弃牌记忆和规则配置。真实 `Game`、持久化 `Checkpoint`、其他手牌和真实牌堆均不传入。未知牌从标准牌库扣除已知物理牌后采样，对手摸牌和选色仅提供软证据；主动摸牌不等于确定无色。每次搜索迭代重新采样，树边合并信息集动作与可用次数；各玩家的 UCB 使用自己的奖励，避免电脑组成一个针对真人的阵营。启发式只作为先验和模拟策略。
+
+采样产生独立的假想对局，再由同一规则 Registry 和 game 引擎推演。共享规则必须不可变；模拟使用自己的随机源。真实游戏的洗牌与隐藏状态不影响给定观察和种子的决策。公开 `bots` 资料与私有记忆分开构造，HTTP 不序列化内部 Record。
+
+`room` 持久化电脑配置、公开记忆、回合行动期限和每个 UNO 窗口的计划反应。`next_bot_at` 是快照的有索引派生列，Create/Transact 与快照在同一数据库事务中写入；只读队列查询不更新游戏或 TTL。无电脑的房间没有队列项。
+
+`botrunner` 每 100ms 拉取到期房间，默认两名 worker，同一房间不会被本进程重复调度。先读取脱离存储的任务，再释放锁计算，用版本与当前任务校验提交；真人动作或另一项 UNO 提交使旧决策失效，重读后重新决定。失败任务持久化延后，避免堵住其他任务；窗口已过期时声明改为处罚。停服取消搜索并等待 worker 退出后，才关闭数据库。该队列按当前单进程 SQLite 部署设计；增加多实例需补任务租约，游戏提交的 CAS 不能代替跨进程任务调度。
+
+## 账户边界
+
+`internal/account` 不依赖 HTTP、房间或规则；SQLite 实现账户仓储。账户与首次会话原子提交，用户名规范键有唯一索引，头像内容寻址，公开资料与密码记录分别构造。密码使用标准库 PBKDF2-HMAC-SHA256（600000 次、32 字节随机盐），长度为 8–14 个 Unicode 字符。
+
+HTTP 先验证 HttpOnly Cookie，再校验可选 X-Account-ID 以防浏览器标签页身份漂移，然后用 room.WithAccount 限定房间凭证。房间聚合持久化账户到座位的绑定；重入复用座位并轮换令牌。账户资料由 HTTP 批量补全到 profiles，不进入游戏聚合。头像变动不会伪造游戏版本；客户端单独检测资料变化。
+
+头像在有界工作槽中解码、裁切、缩放、重编码，原始图片不落盘；数据库只保留仍被引用的规范 PNG。更换或恢复默认头像在同一事务修改资料并回收无引用图片。规则扩展继续只依赖 game 协议。

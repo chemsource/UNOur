@@ -7,39 +7,51 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 
 	"unour/game"
+	"unour/internal/account"
 	"unour/internal/room"
 )
 
 type Rooms interface {
 	Create(context.Context, room.CreateRequest) (room.View, error)
-	Join(context.Context, string, string) (room.JoinResult, error)
+	CreateSolo(context.Context, string, string, room.SoloRequest) (room.JoinResult, error)
+	JoinAccount(context.Context, string, string, string) (room.JoinResult, error)
 	State(context.Context, string, string) (room.View, error)
 	Execute(context.Context, string, string, room.ActionRequest) (room.ActionResult, error)
 	Delete(context.Context, string, string) error
 }
 
 type Config struct {
+	Accounts       *account.Service
+	SecureCookies  bool
 	Logger         *slog.Logger
 	AllowedOrigins []string
+	TrustedProxies []netip.Prefix
 }
 type handler struct {
-	rooms   Rooms
-	logger  *slog.Logger
-	origins map[string]bool
+	accounts       *account.Service
+	secureCookies  bool
+	loginLimit     attemptLimiter
+	credentials    chan struct{}
+	rooms          Rooms
+	logger         *slog.Logger
+	origins        map[string]bool
+	trustedProxies []netip.Prefix
 }
 
 func New(rooms Rooms, cfg Config) (http.Handler, error) {
-	if rooms == nil {
-		return nil, fmt.Errorf("room service is required")
+	if rooms == nil || cfg.Accounts == nil {
+		return nil, fmt.Errorf("room and account services are required")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	h := &handler{rooms: rooms, logger: cfg.Logger, origins: make(map[string]bool)}
+	h := &handler{rooms: rooms, accounts: cfg.Accounts, secureCookies: cfg.SecureCookies, credentials: make(chan struct{}, 4), logger: cfg.Logger, origins: make(map[string]bool)}
+	h.trustedProxies = append([]netip.Prefix(nil), cfg.TrustedProxies...)
 	for _, origin := range cfg.AllowedOrigins {
 		u, err := url.Parse(origin)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -49,9 +61,16 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.only("GET", func(w http.ResponseWriter, r *http.Request) { h.json(w, 200, map[string]string{"status": "ok"}) }))
-	mux.HandleFunc("/api/v1/rooms", h.only("POST", h.create))
-	mux.HandleFunc("/api/v1/rooms/{room}/players", h.only("POST", h.join))
-	mux.HandleFunc("/api/v1/rooms/{room}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/auth/register", h.only("POST", h.credentialsEndpoint(true)))
+	mux.HandleFunc("/api/v1/auth/login", h.only("POST", h.credentialsEndpoint(false)))
+	mux.HandleFunc("/api/v1/auth/logout", h.only("POST", h.authenticated(h.logout)))
+	mux.HandleFunc("/api/v1/account", h.only("GET", h.authenticated(h.me)))
+	mux.HandleFunc("/api/v1/account/avatar", h.authenticated(h.accountAvatar))
+	mux.HandleFunc("/api/v1/avatars/{digest}", h.only("GET", h.avatar))
+	mux.HandleFunc("/api/v1/rooms", h.only("POST", h.authenticated(h.create)))
+	mux.HandleFunc("/api/v1/solo", h.only("POST", h.authenticated(h.solo)))
+	mux.HandleFunc("/api/v1/rooms/{room}/players", h.only("POST", h.authenticated(h.join)))
+	mux.HandleFunc("/api/v1/rooms/{room}", h.authenticated(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			h.state(w, r)
@@ -60,9 +79,9 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 		default:
 			h.methodNotAllowed(w, "GET, DELETE")
 		}
-	})
+	}))
 	for suffix, action := range map[string]game.Action{"start": game.Start, "play": game.Play, "draw": game.Draw, "pass": game.Pass, "challenge": game.Challenge, "uno": game.SayUNO, "uno-penalty": game.PenalizeUNO} {
-		mux.HandleFunc("/api/v1/rooms/{room}/"+suffix, h.only("POST", h.action(action)))
+		mux.HandleFunc("/api/v1/rooms/{room}/"+suffix, h.only("POST", h.authenticated(h.action(action))))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		h.problem(w, 404, "not_found", "endpoint does not exist")
@@ -95,21 +114,42 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/rooms/"+v.ID)
-	h.json(w, 201, v)
+	h.roomJSON(w, r, 201, v)
 }
 func (h *handler) join(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if !h.decode(w, r, &req, false) {
+	var req struct{}
+	if !h.decode(w, r, &req, true) {
 		return
 	}
-	v, err := h.rooms.Join(r.Context(), r.PathValue("room"), req.Name)
+	user := currentUser(r)
+	v, err := h.rooms.JoinAccount(r.Context(), r.PathValue("room"), user.ID, user.Username)
 	if err != nil {
 		h.failure(w, r, err)
 		return
 	}
-	h.json(w, 201, v)
+	h.joinJSON(w, r, v)
+}
+func (h *handler) solo(w http.ResponseWriter, r *http.Request) {
+	var req room.SoloRequest
+	if !h.decode(w, r, &req, false) {
+		return
+	}
+	user := currentUser(r)
+	v, err := h.rooms.CreateSolo(r.Context(), user.ID, user.Username, req)
+	if err != nil {
+		h.failure(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/rooms/"+v.Room.ID)
+	h.joinJSON(w, r, v)
+}
+func (h *handler) joinJSON(w http.ResponseWriter, r *http.Request, v room.JoinResult) {
+	view, err := h.decorate(r.Context(), v.Room)
+	if err != nil {
+		h.failure(w, r, err)
+		return
+	}
+	h.json(w, 201, map[string]any{"player_id": v.PlayerID, "token": v.Token, "room": view})
 }
 func (h *handler) state(w http.ResponseWriter, r *http.Request) {
 	v, err := h.rooms.State(r.Context(), r.PathValue("room"), bearer(r))
@@ -117,7 +157,7 @@ func (h *handler) state(w http.ResponseWriter, r *http.Request) {
 		h.failure(w, r, err)
 		return
 	}
-	h.json(w, 200, v)
+	h.roomJSON(w, r, 200, v)
 }
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.rooms.Delete(r.Context(), r.PathValue("room"), bearer(r)); err != nil {
@@ -174,7 +214,12 @@ func (h *handler) action(action game.Action) http.HandlerFunc {
 			h.failure(w, r, err)
 			return
 		}
-		h.json(w, 200, result)
+		view, err := h.decorate(r.Context(), result.Room)
+		if err != nil {
+			h.failure(w, r, err)
+			return
+		}
+		h.json(w, 200, map[string]any{"room": view, "events": result.Events})
 	}
 }
 

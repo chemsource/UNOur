@@ -7,6 +7,9 @@ type PlayerView struct {
 	Hand       []Card     `json:"hand,omitempty"`
 	Eliminated bool       `json:"eliminated"`
 	UNO        *UNOWindow `json:"uno,omitempty"`
+	// UNODeclared identifies the last successfully declared window. Unlike UNO,
+	// it remains visible after resolution so polling clients cannot miss the call.
+	UNODeclared uint64 `json:"uno_declared,omitempty"`
 }
 
 type View struct {
@@ -35,6 +38,9 @@ func (g *Game) View(viewer PlayerID) View {
 	v := View{Phase: s.phase, Version: s.version, You: viewer, Direction: s.direction, ActiveColor: s.active, DrawPileCount: len(s.draw), DiscardCount: len(s.discard), PendingDraw: s.pending, PendingDrawKind: s.pendingKind, Winner: s.winner, Players: make([]PlayerView, 0, len(s.players))}
 	for _, p := range s.players {
 		pv := PlayerView{ID: p.id, Name: p.name, HandCount: len(p.hand), Eliminated: p.eliminated}
+		if p.lastUNOAction == SayUNO {
+			pv.UNODeclared = p.lastUNO
+		}
 		if p.id == viewer {
 			pv.Hand = append([]Card(nil), p.hand...)
 		}

@@ -54,25 +54,30 @@ func (h *handler) middleware(next http.Handler) http.Handler {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			if r.Method == http.MethodOptions {
 				method := r.Header.Get("Access-Control-Request-Method")
-				if method != "GET" && method != "POST" && method != "DELETE" {
+				if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
 					h.problem(rw, 405, "method_not_allowed", "preflight method is not allowed")
 					return
 				}
 				for _, header := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 					header = strings.ToLower(strings.TrimSpace(header))
-					if header != "" && header != "authorization" && header != "content-type" {
+					if header != "" && header != "authorization" && header != "content-type" && header != "x-account-id" {
 						h.problem(rw, 403, "header_not_allowed", "preflight header is not allowed")
 						return
 					}
 				}
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Account-ID")
 				w.Header().Set("Access-Control-Max-Age", "600")
 				rw.WriteHeader(204)
 				return
 			}
+		}
+		if origin == "" && r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			h.problem(rw, 403, "origin_not_allowed", "cross-site mutation is not allowed")
+			return
 		}
 		next.ServeHTTP(rw, r)
 	})

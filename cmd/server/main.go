@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"unour/game"
+	"unour/internal/account"
+	"unour/internal/bot"
+	"unour/internal/botrunner"
 	"unour/internal/httpapi"
 	"unour/internal/room"
 	"unour/internal/store/sqlite"
@@ -43,7 +46,15 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	handler, err := httpapi.New(rooms, httpapi.Config{Logger: logger, AllowedOrigins: cfg.origins})
+	accounts, err := account.New(store, account.Config{})
+	if err != nil {
+		return err
+	}
+	computers, err := botrunner.New(store, rooms, bot.New(registry), botrunner.Config{Logger: logger})
+	if err != nil {
+		return err
+	}
+	handler, err := httpapi.New(rooms, httpapi.Config{Accounts: accounts, SecureCookies: cfg.secureCookies, Logger: logger, AllowedOrigins: cfg.origins, TrustedProxies: cfg.trustedProxies})
 	if err != nil {
 		return err
 	}
@@ -53,6 +64,10 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
+	botCtx, cancelBots := context.WithCancel(ctx)
+	botDone := make(chan struct{})
+	go func() { defer close(botDone); _ = computers.Run(botCtx) }()
+	defer func() { cancelBots(); <-botDone }()
 	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
 	cleanupDone := make(chan struct{})
 	if cfg.roomTTL > 0 {

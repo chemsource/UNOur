@@ -137,7 +137,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 || version < 0 {
+	if version > 3 || version < 0 {
 		return fmt.Errorf("unsupported SQLite schema version %d", version)
 	}
 	if version == 0 {
@@ -149,6 +149,31 @@ func (s *Store) migrate(ctx context.Context) error {
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("initialize SQLite schema: %w", err)
+			}
+		}
+	}
+	if version < 2 {
+		for _, statement := range []string{
+			`CREATE TABLE accounts (id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL, username_key TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, avatar_digest TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`,
+			`CREATE TABLE account_sessions (digest BLOB PRIMARY KEY NOT NULL CHECK(length(digest)=32), account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`,
+			`CREATE INDEX account_sessions_expiry ON account_sessions(expires_at)`,
+			`CREATE INDEX account_sessions_account ON account_sessions(account_id,created_at)`,
+			`CREATE TABLE avatars (digest TEXT PRIMARY KEY NOT NULL CHECK(length(digest)=64), content BLOB NOT NULL)`,
+			`PRAGMA user_version=2`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migrate account schema: %w", err)
+			}
+		}
+	}
+	if version < 3 {
+		for _, statement := range []string{
+			`ALTER TABLE rooms ADD COLUMN next_bot_at INTEGER`,
+			`CREATE INDEX rooms_next_bot_at ON rooms(next_bot_at,id) WHERE next_bot_at IS NOT NULL`,
+			`PRAGMA user_version=3`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migrate computer schedule: %w", err)
 			}
 		}
 	}
@@ -168,7 +193,7 @@ func secureSidecars(path string) error {
 }
 
 func (s *Store) validateExisting(ctx context.Context) error {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,payload,generation,revision FROM rooms`)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,payload,generation,revision,next_bot_at FROM rooms`)
 	if err != nil {
 		return fmt.Errorf("load rooms: %w", err)
 	}
@@ -177,14 +202,19 @@ func (s *Store) validateExisting(ctx context.Context) error {
 		var id string
 		var payload, generation []byte
 		var revision int64
-		if err := rows.Scan(&id, &payload, &generation, &revision); err != nil {
+		var nextBot sql.NullInt64
+		if err := rows.Scan(&id, &payload, &generation, &revision, &nextBot); err != nil {
 			return err
 		}
 		if err := validateRevision(generation, revision); err != nil {
 			return fmt.Errorf("cannot restore room %q: %w", id, err)
 		}
-		if _, err := s.codec.Decode(payload); err != nil {
+		record, err := s.codec.Decode(payload)
+		if err != nil {
 			return fmt.Errorf("cannot restore room %q: %w", id, err)
+		}
+		if nextBot != botDeadline(record) {
+			return fmt.Errorf("cannot restore room %q: computer schedule differs from snapshot", id)
 		}
 	}
 	return rows.Err()

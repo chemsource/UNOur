@@ -77,7 +77,7 @@ func (s *Store) Create(ctx context.Context, id string, r *room.Record) error {
 	if count >= s.maxRooms {
 		return room.ErrCapacity
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id,generation,revision,payload,touched_at) VALUES(?,?,1,?,?)`, id, generation, payload, s.now().UnixMilli()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id,generation,revision,payload,touched_at,next_bot_at) VALUES(?,?,1,?,?,?)`, id, generation, payload, s.now().UnixMilli(), botDeadline(r)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -118,7 +118,7 @@ func (s *Store) Transact(ctx context.Context, id string, fn func(*room.Record) e
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE rooms SET payload=?,revision=revision+1,touched_at=? WHERE id=? AND generation=? AND revision=?`, payload, s.now().UnixMilli(), id, r.generation, r.revision)
+	result, err := tx.ExecContext(ctx, `UPDATE rooms SET payload=?,revision=revision+1,touched_at=?,next_bot_at=? WHERE id=? AND generation=? AND revision=?`, payload, s.now().UnixMilli(), botDeadline(r.record), id, r.generation, r.revision)
 	if err != nil {
 		return err
 	}

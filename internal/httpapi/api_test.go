@@ -2,39 +2,59 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unour/internal/account"
 
 	"unour/game"
 	"unour/internal/httpapi"
 	"unour/internal/room"
-	"unour/internal/store/memory"
+	"unour/internal/store/sqlite"
 )
 
 type client struct {
-	t       *testing.T
-	handler http.Handler
-	now     time.Time
+	t          *testing.T
+	handler    http.Handler
+	now        time.Time
+	alice, bob string
+	cookies    map[string]string
 }
 
 func setup(t *testing.T) *client {
 	t.Helper()
 	c := &client{t: t, now: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
-	store, err := memory.New(memory.Config{MaxRooms: 10, Now: func() time.Time { return c.now }})
+	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "http.db"), MaxRooms: 10, Now: func() time.Time { return c.now }, Codec: room.NewCodec(nil, func([]game.Card) error { return nil })})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
+	accounts, err := account.New(store, account.Config{Now: func() time.Time { return c.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := accounts.Register(context.Background(), "Alice", "valid-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := accounts.Register(context.Background(), "Bob", "valid-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.alice, c.bob = alice.Token, bob.Token
+	c.cookies = make(map[string]string)
 	s, err := room.New(store, room.Config{Now: func() time.Time { return c.now }, GameOptions: game.Options{InitialHand: 2, Shuffle: func([]game.Card) error { return nil }}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.handler, err = httpapi.New(s, httpapi.Config{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{"http://localhost:5173"}})
+	c.handler, err = httpapi.New(s, httpapi.Config{Accounts: accounts, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{"http://localhost:5173"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +68,11 @@ func (c *client) request(method, path, token, body string) *httptest.ResponseRec
 	}
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
+		cookie := c.cookies[token]
+		if cookie == "" {
+			cookie = token
+		}
+		r.AddCookie(&http.Cookie{Name: "unour_account", Value: cookie})
 	}
 	w := httptest.NewRecorder()
 	c.handler.ServeHTTP(w, r)
@@ -66,9 +91,11 @@ func decode[T any](t *testing.T, w *httptest.ResponseRecorder, want int) T {
 }
 func (c *client) start() (room.JoinResult, room.JoinResult) {
 	c.t.Helper()
-	decode[room.View](c.t, c.request("POST", "/api/v1/rooms", "", `{"id":"table"}`), 201)
-	a := decode[room.JoinResult](c.t, c.request("POST", "/api/v1/rooms/table/players", "", `{"name":"Alice"}`), 201)
-	b := decode[room.JoinResult](c.t, c.request("POST", "/api/v1/rooms/table/players", "", `{"name":"Bob"}`), 201)
+	decode[room.View](c.t, c.request("POST", "/api/v1/rooms", c.alice, `{"id":"table"}`), 201)
+	a := decode[room.JoinResult](c.t, c.request("POST", "/api/v1/rooms/table/players", c.alice, `{}`), 201)
+	b := decode[room.JoinResult](c.t, c.request("POST", "/api/v1/rooms/table/players", c.bob, `{}`), 201)
+	c.cookies[a.Token] = c.alice
+	c.cookies[b.Token] = c.bob
 	decode[room.ActionResult](c.t, c.request("POST", "/api/v1/rooms/table/start", a.Token, `{}`), 200)
 	return a, b
 }
@@ -123,15 +150,16 @@ func TestHTTPRejectsUnauthenticatedAndForgedIdentity(t *testing.T) {
 func TestHTTPJSONValidationAndRouting(t *testing.T) {
 	c := setup(t)
 	for _, body := range []string{"", `null`, `[]`, `{`, `{"unknown":true}`, `{} {}`} {
-		w := c.request("POST", "/api/v1/rooms", "", body)
+		w := c.request("POST", "/api/v1/rooms", c.alice, body)
 		decode[map[string]any](t, w, 400)
 		if w.Header().Get("Content-Type") != "application/json" {
 			t.Fatal("error is not JSON")
 		}
 	}
-	decode[map[string]any](t, c.request("POST", "/api/v1/rooms", "", `{"id":"`+strings.Repeat("a", 17000)+`"}`), 413)
+	decode[map[string]any](t, c.request("POST", "/api/v1/rooms", c.alice, `{"id":"`+strings.Repeat("a", 17000)+`"}`), 413)
 	r := httptest.NewRequest("POST", "/api/v1/rooms", bytes.NewBufferString(`{}`))
 	r.Header.Set("Content-Type", "text/plain")
+	r.AddCookie(&http.Cookie{Name: "unour_account", Value: c.alice})
 	w := httptest.NewRecorder()
 	c.handler.ServeHTTP(w, r)
 	decode[map[string]any](t, w, 415)
@@ -159,7 +187,7 @@ func TestCORSPreflightAndSessionResponsesAreNotCached(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatalf("untrusted origin: %d", w.Code)
 	}
-	w = c.request("POST", "/api/v1/rooms", "", `{}`)
+	w = c.request("POST", "/api/v1/rooms", c.alice, `{}`)
 	if w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("sensitive responses can be cached")
 	}

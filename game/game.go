@@ -160,6 +160,14 @@ type Game struct {
 	initialHand int
 }
 
+type preparedCommand struct {
+	idx          int
+	cardIndex    int
+	card         Card
+	effects      Effects
+	duplicateUNO bool
+}
+
 func New(opts Options) (*Game, error) {
 	if opts.MaxPlayers == 0 {
 		opts.MaxPlayers = 10
@@ -203,88 +211,128 @@ func (g *Game) Join(id PlayerID, name string) error {
 }
 
 // Apply is failure-atomic, including a rule rejection or a failed reshuffle.
-// Physical cards are copied into a bounded candidate state and committed only
+// A candidate state uses copy-on-write card storage and is committed only
 // after the complete operation succeeds. Events never contain hidden cards.
 func (g *Game) Apply(cmd Command) (Result, error) {
-	if cmd.ExpectedVersion != nil && *cmd.ExpectedVersion != g.s.version {
-		return Result{}, fail(VersionConflict, "state version is stale")
-	}
-	idx := g.s.index(cmd.PlayerID)
-	if idx < 0 {
-		return Result{}, fail(InvalidInput, "player is not in the game")
-	}
-	if cmd.Type == Start {
-		if g.s.phase != Lobby || idx != 0 || len(g.s.players) < 2 {
-			return Result{}, fail(InvalidState, "only the host can start a lobby with at least two players")
-		}
-	} else {
-		if g.s.phase != Playing || g.s.players[idx].eliminated {
-			return Result{}, fail(InvalidState, "player cannot act in this game state")
-		}
-		if cmd.Type != SayUNO && cmd.Type != PenalizeUNO && idx != g.s.turn {
-			return Result{}, fail(NotYourTurn, "it is another player's turn")
-		}
-	}
-	if (cmd.Type == SayUNO || cmd.Type == PenalizeUNO) && cmd.WindowID != 0 && g.s.players[idx].lastUNO == cmd.WindowID && g.s.players[idx].lastUNOAction == cmd.Type {
-		return Result{Version: g.s.version, Events: []Event{}}, nil
-	}
-	n := g.s.clone()
-	ctx := Context{s: &n, command: cmd}
-	cardIndex := -1
-	if cmd.Type == Play {
-		for i, c := range n.players[idx].hand {
-			if c.ID == cmd.CardID {
-				cardIndex = i
-				ctx.card = c
-				break
-			}
-		}
-		if cardIndex < 0 {
-			return Result{}, fail(CardNotOwned, "card is not in your hand")
-		}
-		if n.drawnCard != 0 && n.drawnCard != cmd.CardID {
-			return Result{}, fail(CardNotPlayable, "only the card just drawn can be played")
-		}
-	}
-	effects := Effects{TurnSteps: 1}
-	for _, rule := range g.rules.rules {
-		if err := rule.Evaluate(ctx, &effects); err != nil {
-			return Result{}, &Error{Code: RuleViolation, Message: "rule " + rule.ID() + " rejected the action", Cause: err}
-		}
-	}
-	if err := effects.validate(); err != nil {
+	return g.apply(cmd, false)
+}
+
+// ApplyOwned is for a private simulation state with a single owner. It uses the
+// same validation and transition code as Apply. Only an infallible play without
+// follow-up draws reuses card storage in place; every operation that can fail
+// after mutation retains Apply's copy-on-write rollback behavior.
+func (g *Game) ApplyOwned(cmd Command) (Result, error) {
+	return g.apply(cmd, true)
+}
+
+func (g *Game) apply(cmd Command, owned bool) (Result, error) {
+	prepared, err := g.prepare(cmd)
+	if err != nil {
 		return Result{}, err
 	}
+	if prepared.duplicateUNO {
+		return Result{Version: g.s.version, Events: []Event{}}, nil
+	}
+	idx := prepared.idx
+	var n state
+	if owned && cmd.Type == Play && prepared.effects.DrawNext == 0 {
+		n = g.s.forkOwnedPlay()
+	} else {
+		n = g.s.fork()
+	}
+	effects := prepared.effects
 	events := make([]Event, 0, 4)
-	var err error
+	var errApply error
 	switch cmd.Type {
 	case Start:
-		err = g.start(&n, effects, &events)
+		errApply = g.start(&n, effects, &events)
 	case Play:
-		err = g.play(&n, idx, cardIndex, cmd, ctx.card, effects, &events)
+		errApply = g.play(&n, idx, prepared.cardIndex, cmd, prepared.card, effects, &events)
 	case Draw:
-		err = g.drawTurn(&n, idx, effects, &events)
+		errApply = g.drawTurn(&n, idx, effects, &events)
 	case Pass:
-		if n.drawnCard == 0 {
-			return Result{}, fail(InvalidState, "draw a card before passing")
-		}
 		n.advance(1)
 		events = append(events, Event{Type: "passed", PlayerID: cmd.PlayerID})
 	case Challenge:
-		err = g.challenge(&n, idx, effects, &events)
+		errApply = g.challenge(&n, idx, effects, &events)
 	case SayUNO, PenalizeUNO:
-		err = g.uno(&n, idx, cmd, &events)
-	default:
-		err = fail(InvalidInput, "unknown action %q", cmd.Type)
+		errApply = g.uno(&n, idx, cmd, &events)
 	}
-	if err != nil {
-		return Result{}, err
+	if errApply != nil {
+		return Result{}, errApply
 	}
 	n.enforceLimit(effects.HandLimit, &events)
 	n.settle(&events)
 	n.version++
 	g.s = n
 	return Result{Version: n.version, Events: events}, nil
+}
+
+// CanApply runs the same state, rule, and action validation as Apply without
+// mutating the game or invoking the shuffle callback. Runtime failures such as
+// entropy errors remain the responsibility of Apply.
+func (g *Game) CanApply(cmd Command) error {
+	_, err := g.prepare(cmd)
+	return err
+}
+
+func (g *Game) prepare(cmd Command) (preparedCommand, error) {
+	prepared := preparedCommand{cardIndex: -1}
+	if cmd.ExpectedVersion != nil && *cmd.ExpectedVersion != g.s.version {
+		return prepared, fail(VersionConflict, "state version is stale")
+	}
+	idx := g.s.index(cmd.PlayerID)
+	if idx < 0 {
+		return prepared, fail(InvalidInput, "player is not in the game")
+	}
+	if cmd.Type == Start {
+		if g.s.phase != Lobby || idx != 0 || len(g.s.players) < 2 {
+			return prepared, fail(InvalidState, "only the host can start a lobby with at least two players")
+		}
+	} else {
+		if g.s.phase != Playing || g.s.players[idx].eliminated {
+			return prepared, fail(InvalidState, "player cannot act in this game state")
+		}
+		if cmd.Type != SayUNO && cmd.Type != PenalizeUNO && idx != g.s.turn {
+			return prepared, fail(NotYourTurn, "it is another player's turn")
+		}
+	}
+	if (cmd.Type == SayUNO || cmd.Type == PenalizeUNO) && cmd.WindowID != 0 && g.s.players[idx].lastUNO == cmd.WindowID && g.s.players[idx].lastUNOAction == cmd.Type {
+		prepared.duplicateUNO = true
+		return prepared, nil
+	}
+	ctx := Context{s: &g.s, command: cmd}
+	if cmd.Type == Play {
+		for i, c := range g.s.players[idx].hand {
+			if c.ID == cmd.CardID {
+				prepared.cardIndex = i
+				ctx.card = c
+				break
+			}
+		}
+		if prepared.cardIndex < 0 {
+			return prepared, fail(CardNotOwned, "card is not in your hand")
+		}
+		if g.s.drawnCard != 0 && g.s.drawnCard != cmd.CardID {
+			return prepared, fail(CardNotPlayable, "only the card just drawn can be played")
+		}
+	}
+	effects := Effects{TurnSteps: 1}
+	for _, rule := range g.rules.rules {
+		if err := rule.Evaluate(ctx, &effects); err != nil {
+			return prepared, &Error{Code: RuleViolation, Message: "rule " + rule.ID() + " rejected the action", Cause: err}
+		}
+	}
+	if err := effects.validate(); err != nil {
+		return prepared, err
+	}
+	if err := g.validateAction(&g.s, idx, cmd, ctx.card, effects); err != nil {
+		return prepared, err
+	}
+	prepared.idx = idx
+	prepared.card = ctx.card
+	prepared.effects = effects
+	return prepared, nil
 }
 
 func (s *state) enforceLimit(limit int, events *[]Event) {

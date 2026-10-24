@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"unour/game"
+	"unour/internal/bot"
 )
 
 const maxSnapshotBytes = 1 << 20
@@ -34,19 +35,25 @@ func NewCodec(rules RuleBuilder, shuffle game.ShuffleFunc) RecordCodec {
 }
 
 type recordSnapshot struct {
-	FormatVersion int                      `json:"format_version"`
-	Game          game.Checkpoint          `json:"game"`
-	HostID        game.PlayerID            `json:"host_id"`
-	Sessions      map[string]game.PlayerID `json:"session_digests"`
-	Rules         []game.RuleSpec          `json:"rules"`
-	CreatedAt     time.Time                `json:"created_at"`
+	FormatVersion int                           `json:"format_version"`
+	Game          game.Checkpoint               `json:"game"`
+	HostID        game.PlayerID                 `json:"host_id"`
+	Sessions      map[string]game.PlayerID      `json:"session_digests"`
+	Accounts      map[string]game.PlayerID      `json:"accounts,omitempty"`
+	Rules         []game.RuleSpec               `json:"rules"`
+	CreatedAt     time.Time                     `json:"created_at"`
+	Bots          map[game.PlayerID]bot.Profile `json:"bots,omitempty"`
+	BotMemory     bot.Memory                    `json:"bot_memory,omitzero"`
+	BotTurnAt     time.Time                     `json:"bot_turn_at,omitzero"`
+	BotUNO        map[game.PlayerID]BotUNO      `json:"bot_uno,omitempty"`
 }
 
 func (c *codec) Encode(r *Record) ([]byte, error) {
 	if r == nil || r.Game == nil {
 		return nil, fmt.Errorf("cannot persist a room without a game")
 	}
-	s := recordSnapshot{FormatVersion: 1, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
+	s := recordSnapshot{FormatVersion: 1, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Accounts: r.Accounts, Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
+	s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO = r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO
 	for digest, id := range r.Sessions {
 		s.Sessions[hex.EncodeToString(digest[:])] = id
 	}
@@ -99,7 +106,8 @@ func (c *codec) Decode(data []byte) (*Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("restore game: %w", err)
 	}
-	r := &Record{Game: g, HostID: s.HostID, Sessions: make(map[[32]byte]game.PlayerID, len(s.Sessions)), Rules: copySpecs(s.Rules), CreatedAt: s.CreatedAt}
+	r := &Record{Game: g, HostID: s.HostID, Sessions: make(map[[32]byte]game.PlayerID, len(s.Sessions)), Accounts: s.Accounts, Rules: copySpecs(s.Rules), CreatedAt: s.CreatedAt}
+	r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO = s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO
 	for text, id := range s.Sessions {
 		raw, _ := hex.DecodeString(text)
 		var digest [32]byte
@@ -114,7 +122,7 @@ func validateRecord(s recordSnapshot) error {
 		return fmt.Errorf("room creation time is missing")
 	}
 	players := s.Game.Players
-	if len(players) != len(s.Sessions) {
+	if len(players) != len(s.Sessions)+len(s.Bots) {
 		return fmt.Errorf("room session count differs from player count")
 	}
 	if (len(players) == 0 && s.HostID != "") || (len(players) > 0 && s.HostID != players[0].ID) {
@@ -125,10 +133,19 @@ func validateRecord(s recordSnapshot) error {
 		ids[p.ID] = true
 	}
 	assigned := make(map[game.PlayerID]bool, len(players))
+	accountSeats := make(map[game.PlayerID]bool, len(s.Accounts))
+	for accountID, playerID := range s.Accounts {
+		_, computer := s.Bots[playerID]
+		if !validID(accountID) || !ids[playerID] || accountSeats[playerID] || computer {
+			return fmt.Errorf("invalid account seat mapping")
+		}
+		accountSeats[playerID] = true
+	}
 	hashes := make(map[[32]byte]bool, len(players))
 	for text, id := range s.Sessions {
 		raw, err := hex.DecodeString(text)
-		if err != nil || len(raw) != 32 || !ids[id] || assigned[id] {
+		_, computer := s.Bots[id]
+		if err != nil || len(raw) != 32 || !ids[id] || assigned[id] || computer {
 			return fmt.Errorf("invalid room session mapping")
 		}
 		var digest [32]byte
@@ -138,6 +155,68 @@ func validateRecord(s recordSnapshot) error {
 		}
 		hashes[digest] = true
 		assigned[id] = true
+	}
+	if err := validateBots(s, ids); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBots(s recordSnapshot, players map[game.PlayerID]bool) error {
+	for id, profile := range s.Bots {
+		if !players[id] || id == s.HostID || !profile.Difficulty.Valid() || !profile.Style.Valid() {
+			return fmt.Errorf("invalid computer seat")
+		}
+	}
+	if len(s.Bots) == 0 {
+		if !s.BotTurnAt.IsZero() || len(s.BotUNO) > 0 || len(s.BotMemory.Discard) > 0 {
+			return fmt.Errorf("computer state without computer players")
+		}
+		return nil
+	}
+	if len(s.Accounts) != 1 || len(s.Sessions) != 1 {
+		return fmt.Errorf("solo table requires one account and one human session")
+	}
+	if len(s.BotMemory.Discard) != len(s.Game.Discard) {
+		return fmt.Errorf("public discard memory differs from game")
+	}
+	for i, card := range s.BotMemory.Discard {
+		if card != s.Game.Discard[i] {
+			return fmt.Errorf("public discard memory contains a hidden or stale card")
+		}
+	}
+	turn := game.PlayerID("")
+	if s.Game.Phase == game.Playing {
+		if s.Game.TurnIndex < 0 || s.Game.TurnIndex >= len(s.Game.Players) {
+			return fmt.Errorf("invalid computer turn index")
+		}
+		turn = s.Game.Players[s.Game.TurnIndex].ID
+	}
+	_, computerTurn := s.Bots[turn]
+	if computerTurn == s.BotTurnAt.IsZero() {
+		return fmt.Errorf("computer turn deadline differs from current turn")
+	}
+	for id, task := range s.BotUNO {
+		if _, ok := s.Bots[id]; !ok || task.At.IsZero() {
+			return fmt.Errorf("invalid computer UNO task")
+		}
+		found := false
+		for _, p := range s.Game.Players {
+			if p.ID == id && p.UNO != nil && p.UNO.ID == task.WindowID {
+				found = true
+				if task.Declare != task.At.Before(p.UNO.Deadline) {
+					return fmt.Errorf("UNO schedule contradicts declaration")
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("stale computer UNO task")
+		}
+	}
+	for _, p := range s.Game.Players {
+		if _, ok := s.Bots[p.ID]; ok && p.UNO != nil && s.BotUNO[p.ID].WindowID != p.UNO.ID {
+			return fmt.Errorf("missing computer UNO task")
+		}
 	}
 	return nil
 }

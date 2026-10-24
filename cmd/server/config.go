@@ -3,21 +3,40 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type config struct {
-	addr     string
-	maxRooms int
-	roomTTL  time.Duration
-	origins  []string
-	dbPath   string
+	secureCookies  bool
+	addr           string
+	maxRooms       int
+	roomTTL        time.Duration
+	origins        []string
+	trustedProxies []netip.Prefix
+	dbPath         string
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
 	cfg := config{addr: ":8088", maxRooms: 1000, dbPath: "data/unour.db"}
+	if value := getenv("UNO_TRUSTED_PROXIES"); value != "" {
+		for _, part := range strings.Split(value, ",") {
+			prefix, err := netip.ParsePrefix(strings.TrimSpace(part))
+			if err != nil {
+				return config{}, fmt.Errorf("UNO_TRUSTED_PROXIES must contain valid CIDRs: %w", err)
+			}
+			cfg.trustedProxies = append(cfg.trustedProxies, prefix.Masked())
+		}
+	}
+	if value := getenv("UNO_SECURE_COOKIES"); value != "" {
+		var err error
+		cfg.secureCookies, err = strconv.ParseBool(value)
+		if err != nil {
+			return config{}, fmt.Errorf("UNO_SECURE_COOKIES must be a boolean")
+		}
+	}
 	if v := getenv("UNO_DB_PATH"); v != "" {
 		if strings.TrimSpace(v) == "" || v == ":memory:" {
 			return config{}, fmt.Errorf("UNO_DB_PATH must be a persistent file path")
