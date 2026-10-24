@@ -1,0 +1,63 @@
+name: unour
+
+services:
+  api:
+    image: unour-api:${UNOUR_API_RELEASE:-${UNOUR_RELEASE:-local}}
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      UNO_ADDR: :8088
+      UNO_DB_PATH: /data/unour.db
+      UNO_ALLOWED_ORIGINS: ${UNOUR_ORIGINS:?Set UNOUR_ORIGINS to the public HTTPS origin}
+      UNO_SECURE_COOKIES: ${UNO_SECURE_COOKIES:-true}
+      UNO_TRUSTED_PROXIES: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+      UNO_MAX_ROOMS: ${UNO_MAX_ROOMS:-1000}
+      UNO_ROOM_TTL: "0"
+      GOMEMLIMIT: 600MiB
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    pids_limit: 256
+    stop_grace_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    image: unour-web:${UNOUR_WEB_RELEASE:-${UNOUR_RELEASE:-local}}
+    build:
+      context: ${UNOUR_WEB_CONTEXT:-../unour-web}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:${UNOUR_PORT:-18080}:8080
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  data:

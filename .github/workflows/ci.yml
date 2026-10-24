@@ -1,0 +1,64 @@
+name: Backend CI and deployment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-build-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IMAGE_TAG: ${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test, race check, vet and build
+        run: |
+          make check
+          make build
+          git diff --check
+      - name: Build production image
+        run: docker build --tag "unour-api:$IMAGE_TAG" .
+      - name: Upload and deploy verified image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          UNOUR_DEPLOY_KEY: ${{ secrets.UNOUR_DEPLOY_KEY }}
+          UNOUR_KNOWN_HOSTS: ${{ secrets.UNOUR_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$UNOUR_DEPLOY_KEY"
+          test -n "$UNOUR_KNOWN_HOSTS"
+          directory="$RUNNER_TEMP/unour-deploy"
+          install -d -m 0700 "$directory"
+          trap 'rm -rf "$directory"' EXIT
+          printf '%s\n' "$UNOUR_DEPLOY_KEY" > "$directory/key"
+          printf '%s\n' "$UNOUR_KNOWN_HOSTS" > "$directory/known_hosts"
+          chmod 0600 "$directory/key" "$directory/known_hosts"
+          docker image save "unour-api:$IMAGE_TAG" | gzip -1 > "$directory/image.tar.gz"
+          digest=$(sha256sum "$directory/image.tar.gz")
+          digest=${digest%% *}
+          ssh -i "$directory/key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$directory/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
+            unour-deploy@203.0.113.10 \
+            "deploy $GITHUB_SHA $GITHUB_RUN_NUMBER $GITHUB_RUN_ATTEMPT $digest" \
+            < "$directory/image.tar.gz"
+          curl --fail --retry 5 --retry-all-errors --retry-delay 2 \
+            --max-time 15 --user-agent 'UNOur-CI/1.0' https://csac.chat/healthz

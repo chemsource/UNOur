@@ -1,0 +1,15 @@
+# Initial issuance only. Switch to openresty.conf.example after certonly succeeds.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name csac.chat 203.0.113.10;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /www/sites/unour/acme;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 503;
+    }
+}

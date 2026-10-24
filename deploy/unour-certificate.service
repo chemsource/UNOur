@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew UNOur Let's Encrypt certificate
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/unour/unour/deploy/renew-certificate.sh

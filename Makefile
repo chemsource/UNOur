@@ -1,4 +1,4 @@
-.PHONY: run build test race vet check bench fuzz
+.PHONY: run build test race vet check deploy-test bench fuzz
 
 run:
 	go run -buildvcs=false ./cmd/server
@@ -15,7 +15,10 @@ race:
 vet:
 	go vet ./...
 
-check: test vet race
+check: test vet race deploy-test
+
+deploy-test:
+	python3 -B -m unittest discover -s deploy/tests -v
 
 bench:
 	go test ./game -run '^$$' -bench . -benchmem

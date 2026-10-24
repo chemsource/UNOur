@@ -1,0 +1,14 @@
+.git
+.local
+.superpowers
+.env
+.env.*
+bin
+data
+backups
+docs
+*.db
+*.db-wal
+*.db-shm
+*.prof
+coverage.out

@@ -1,8 +1,14 @@
 .local/
 bin/
 coverage.out
+__pycache__/
+*.pyc
 *.prof
 data/
+backups/
+.env
+.env.*
+!.env.example
 *.db
 *.db-wal
 *.db-shm

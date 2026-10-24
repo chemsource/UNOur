@@ -1,0 +1,2 @@
+Defaults:unour-deploy env_keep += "SSH_ORIGINAL_COMMAND"
+unour-deploy ALL=(root) NOPASSWD: /usr/local/sbin/unour-ci-receive api, /usr/local/sbin/unour-ci-receive web

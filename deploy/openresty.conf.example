@@ -1,0 +1,43 @@
+# Included by the existing 1Panel OpenResty http block.
+# cloudflare-realip.conf is generated from Cloudflare's official IP lists.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name csac.chat 203.0.113.10;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /www/sites/unour/acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 308 https://csac.chat$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name csac.chat;
+    http2 on;
+    ssl_certificate /www/sites/unour/letsencrypt/live/csac.chat/fullchain.pem;
+    ssl_certificate_key /www/sites/unour/letsencrypt/live/csac.chat/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:UNOurTLS:10m;
+    ssl_session_timeout 1d;
+    include /www/sites/unour/cloudflare-realip.conf;
+    client_max_body_size 3m;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 20s;
+        proxy_cache off;
+    }
+}

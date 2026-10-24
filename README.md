@@ -1,6 +1,8 @@
 # unour
 
-可组合规则的 UNO Go 后端，使用 SQLite 持久化，最低 Go 1.22.5。游戏逻辑、房间用例、存储和 HTTP 分离；没有全局房间表或全局路由状态。
+可组合规则的 UNO Go 后端，使用 SQLite 持久化，最低 Go 1.26。游戏逻辑、房间用例、存储和 HTTP 分离；没有全局房间表或全局路由状态。
+
+Docker 与 1Panel / OpenResty 正式部署、Let’s Encrypt 续期和数据备份见 [部署说明](docs/deployment.md)。
 
 ## 运行
 
@@ -24,13 +26,15 @@ go run -buildvcs=false ./cmd/server
 | `UNO_DB_PATH` | `data/unour.db` | SQLite 文件路径，相对路径基于工作目录 |
 | `UNO_MAX_ROOMS` | `1000` | 数据库房间数量上限；已有房间不会因降低上限而被删除 |
 | `UNO_ROOM_TTL` | `0` | 默认关闭自动删除；正值表示距最后成功写操作的保留时间，读取不续期 |
+| `UNO_SECURE_COOKIES` | `false` | HTTPS 反向代理部署时设为 `true`；服务直接接收 TLS 时自动启用 Secure |
 | `UNO_ALLOWED_ORIGINS` | 空 | 逗号分隔的完整 origin，例如 `https://uno.example.com`，无结尾 `/` |
+| `UNO_TRUSTED_PROXIES` | 空 | 允许提供 `X-Real-IP` 的代理 CIDR，逗号分隔；默认忽略所有转发地址头 |
 
 `GET /healthz` 返回 `{"status":"ok"}`。服务有请求超时、请求体上限、结构化日志、SIGINT/SIGTERM 优雅退出和空闲房间回收。
 
 构建/运行显式关闭 VCS stamping，因此从源码目录或压缩包运行时不依赖父目录的 Git 状态。
 
-默认数据库为 **`data/unour.db`**，首次启动自动建表。房间、规则、原会话令牌摘要和完整对局都持久化；重启后，前端使用原 token 读取状态即可继续游戏。UNO 窗口保留原期限和去重记录，停机时间计入期限，已经处理的处罚不会再次执行。
+默认数据库为 **`data/unour.db`**，首次启动自动建表。账户、头像、账户会话、房间、规则、房间令牌摘要和完整对局都持久化；重启后，前端使用原 token 读取状态即可继续游戏。UNO 窗口保留原期限和去重记录，停机时间计入期限，已经处理的处罚不会再次执行。
 
 部署时保持相同工作目录，或用绝对路径固定数据库位置：
 
@@ -46,18 +50,38 @@ UNO_DB_PATH=/var/lib/unour/unour.db make run
 
 ## API
 
-所有响应使用 JSON，删除成功返回空的 `204`。创建、加入和健康检查以外的操作需要：
+除头像图片和删除房间的空 `204` 外，响应使用 JSON。注册、登录和健康检查不需要登录；所有房间操作需要账户 Cookie，读取/命令/删除还需要加入房间时返回的凭证：
 
 ```http
-Authorization: Bearer <加入房间时返回的 token>
+Authorization: Bearer <房间 token>
+X-Account-ID: <当前账户 ID>
 ```
 
-玩家 ID 由后端生成，身份从 token 解析。首次加入者为房主。token 只在加入响应返回一次，请由前端保存；服务端仅保存 SHA-256 摘要。
+`X-Account-ID` 为可选的预期身份校验。网页客户端始终携带它；Cookie 已被其他标签页切换时，后端返回 `401 account_changed`，不会以错误账户执行命令。此请求头不能代替 Cookie 登录或房间凭证。
+
+用户名为 3–24 个汉字、英文字母、数字、下划线或短横线，去掉首尾空白后忽略英文大小写唯一。密码为 **8–14 个 Unicode 字符，包含边界**，不裁剪、不截断；使用标准库 PBKDF2-HMAC-SHA256、600000 次迭代、每账户独立的 32 字节随机盐，恒定时间比对。账户和首次会话在同一事务提交。
+
+账户会话使用 30 天 `HttpOnly; SameSite=Lax` Cookie，数据库只保存令牌 SHA-256 摘要。退出会撤销当前会话。每账户最多保留 10 个有效设备会话；认证请求每 IP 20 次/5 分钟，最多四个同时计算密码。头像 PNG/JPEG 最多 2 MiB、单边不超过 4096 像素且总计不超过 1600 万像素，后端中心裁切为 256×256 PNG 并丢弃原文件元数据。解码与缩放全局最多一个，繁忙返回 `503 avatar_busy`。默认头像由前端绘制灰白人像。
+
+| 方法 | 路径 | 请求体 | 作用 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/auth/register` | `{"username":"Alice","password":"12345678"}` | 注册并设置登录 Cookie |
+| POST | `/api/v1/auth/login` | 同上 | 登录并设置新的 Cookie |
+| POST | `/api/v1/auth/logout` | `{}` | 注销当前 Cookie 会话 |
+| GET | `/api/v1/account` | 无 | 当前公开账户资料 |
+| PUT | `/api/v1/account/avatar` | PNG/JPEG 原始二进制 | 更新本人头像；Content-Type 为 image/png 或 image/jpeg |
+| DELETE | `/api/v1/account/avatar` | 无 | 恢复默认头像 |
+| GET | `/api/v1/avatars/{digest}` | 无 | 公开头像 PNG，支持内容缓存与 ETag |
+
+注册成功返回 `201 {user,expires_at}`，登录返回 `200 {user,expires_at}`；账户及头像更新返回 `{user}`。密码、盐、哈希和账户会话令牌均不出现在 JSON 中。
+
+玩家 ID 由后端生成，玩家名来自账户用户名，首次加入者为房主。同一账户重新加入房间会恢复原座位并轮换房间凭证，不会增加重复玩家；一个账户不能使用另一个账户的房间 token。
 
 | 方法 | 路径 | 请求体 | 作用 |
 | --- | --- | --- | --- |
 | POST | `/api/v1/rooms` | `{"id":"table"}` | 创建房间；省略 id 则随机生成 |
-| POST | `/api/v1/rooms/{id}/players` | `{"name":"Alice"}` | 加入，返回玩家 ID、token、房间状态 |
+| POST | `/api/v1/solo` | `{"bot_count":2,"difficulty":"normal"}` | 原子创建、入座并开始人机对战，返回加入结果 |
+| POST | `/api/v1/rooms/{id}/players` | `{}` | 加入/恢复自己的座位，返回玩家 ID、token、房间状态 |
 | GET | `/api/v1/rooms/{id}` | 无 | 获取该会话的私有视图 |
 | DELETE | `/api/v1/rooms/{id}` | 无 | 房主删除房间 |
 | POST | `/api/v1/rooms/{id}/start` | 可省略 | 房主开局，至少两人 |
@@ -70,25 +94,32 @@ Authorization: Bearer <加入房间时返回的 token>
 
 POST 的非空请求体需要 `Content-Type: application/json`。创建与加入成功返回 `201`，动作成功返回 `200`。未知字段、非对象、多个 JSON 值和超过 16 KiB 的请求体会被拒绝。旧版 `/join` 等接口已移除。
 
+### 人机对战
+
+登录后调用 `/api/v1/solo`，选择 1–9 名电脑（总人数 2–10），难度为 `easy/normal/hard/expert`，分别对应简单、标准、困难、专家。可附带与普通房间相同的 `rules`。成功后已经发牌，返回 `{player_id,token,room}`；不要再调用 `start`。只有创建账户能通过原加入接口恢复人机房间，恢复时照常轮换房间 token。
+
+公开房间的 `bots` 字段按玩家 ID 给出 `{difficulty,style}`，电脑按座位顺序命名为 Bot1–Bot9。电脑没有账户或客户端房间 token，手牌同其他对手一样隐藏；HTTP 不返回行为记忆或搜索状态。电脑各自争取获胜，不共享手牌，也不会结盟针对真人。
+
+决策采用隐藏信息采样、公开行为的软推断和信息集蒙特卡洛树搜索；对候选动作前瞻，并用现有游戏引擎校验和推演，兼容已注册规则。难度改变计算预算、前瞻与选择噪声，风格影响留牌、攻击和风险偏好。该实现不依赖外部模型或 API key，也不是经过训练的神经网络；算法背景参见 [Information Set Monte Carlo Tree Search](https://eprints.whiterose.ac.uk/id/eprint/75048/)。
+
+后台统一调度电脑回合、UNO 声明和漏喊罚牌，带有反应时间；低难度可能漏喊。默认最多两个搜索同时进行，每次搜索有时间与工作量限制，不在持有房间写锁时计算。电脑配置、公开记忆和行动期限与对局共同保存，重启后继续；停机期间错过 UNO 的电脑会承受实际罚牌。
+
 ### 示例
 
 ```sh
-curl -s http://localhost:8088/api/v1/rooms \
+# Cookie 文件只用于本地示例；生产使用 HTTPS。
+curl -s -c alice.cookies http://localhost:8088/api/v1/auth/register \
+  -H 'Content-Type: application/json' -d '{"username":"Alice","password":"12345678"}'
+
+curl -s -b alice.cookies http://localhost:8088/api/v1/rooms \
   -H 'Content-Type: application/json' -d '{"id":"table"}'
 
-curl -s http://localhost:8088/api/v1/rooms/table/players \
-  -H 'Content-Type: application/json' -d '{"name":"Alice"}'
+curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table/players \
+  -H 'Content-Type: application/json' -d '{}'
 
-curl -s http://localhost:8088/api/v1/rooms/table/players \
-  -H 'Content-Type: application/json' -d '{"name":"Bob"}'
-
-# 将返回的 Alice token 放入这个变量。
+# 将加入响应中的 token 放入变量，再读取属于该账户的手牌。
 alice_token='加入响应中的 token'
-
-curl -s -X POST http://localhost:8088/api/v1/rooms/table/start \
-  -H "Authorization: Bearer $alice_token"
-
-curl -s http://localhost:8088/api/v1/rooms/table \
+curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
   -H "Authorization: Bearer $alice_token"
 ```
 
@@ -99,6 +130,7 @@ curl -s http://localhost:8088/api/v1/rooms/table \
   "id": "table",
   "host_id": "后端生成的玩家 ID",
   "created_at": "2026-10-25T12:00:00Z",
+  "profiles": {"玩家 ID":{"id":"账户 ID","username":"Alice","avatar_url":"","created_at":"2026-10-25T12:00:00Z"}},
   "rules": [{"name":"matching"},{"name":"actions"},{"name":"draw"},{"name":"challenge"}],
   "state": {
     "phase": "playing",
@@ -134,7 +166,9 @@ curl -s http://localhost:8088/api/v1/rooms/table \
 {"id":9,"deadline":"2026-10-25T12:00:02Z"}
 ```
 
-后端没有自动罚牌计时器。前端负责监听空格/中央点击，并上报结果；后端检查窗口、身份和期限：
+成功声明后，所有玩家读取状态都能看到该玩家的 `uno_declared` 窗口编号，例如 `9`。客户端比较新旧编号显示「玩家名：UNO!」并去重；即使轮询未看到短暂的 `uno` 窗口，也能识别声明。首次进入房间只建立基线，不重放历史提示。罚牌和取消窗口不会被标记为成功声明。
+
+真人的 UNO 仍由前端监听空格/中央点击并上报；后端检查窗口、身份和期限。电脑的 UNO 则由服务端统一调度：
 
 1. 收到新窗口，保存 `window_id`，开始两秒交互。
 2. 玩家按空格或点击中央，立即 POST `/uno`，传该 window_id。
@@ -189,6 +223,8 @@ make bench
 make fuzz
 ```
 
-测试包括完整对局、牌数守恒、非法命令原子性、规则组合、质疑证据、UNO 窗口、并发容量、独立房间并发、TTL、鉴权与 HTTP 全链路，以及 SQLite 重启恢复、会话恢复、提交失败回滚和并发提交冲突。
+测试包括完整对局、牌数守恒、非法命令原子性、规则组合、质疑证据、UNO 窗口、并发容量、独立房间并发、TTL、鉴权与 HTTP 全链路，以及 SQLite 重启恢复、会话恢复、提交失败回滚和并发提交冲突，以及账户唯一性、8/14 位密码边界、注册事务、头像规范化、Cookie 撤销和跨账户凭证隔离。
 
 结构化错误为 `{"error":{"code":"...","message":"..."}}`。常见状态码：400 无效输入、401 会话无效、403 无权限、404 房间不存在、409 状态/回合/版本/UNO 窗口冲突、413 请求体过大、415 内容类型错误、422 规则拒绝、503 房间容量已满。
+
+前端与联调必须运行真实 Go 服务，不提供客户端试玩或模拟服务。人机对战同样由后端处理。配套前端的 `npm test` 会构建并启动隔离的真实服务与临时 SQLite，结束后清理。
