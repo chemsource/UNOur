@@ -1,5 +1,7 @@
 # Docker 与 1Panel / OpenResty 部署
 
+本文及 OpenResty 模板中的 `203.0.113.10` 是文档示例地址，安装时替换为自己的服务器地址。真实部署地址仅放在 GitHub Secret `UNOUR_DEPLOY_HOST` 和服务器本地配置中。
+
 前端与后端保留两个 Git 项目，服务器目录分别是 `/opt/unour/unour` 和 `/opt/unour/unour-web`。后端根目录的 `compose.yaml` 管理两个容器；现有 1Panel OpenResty 负责 HTTPS，再代理到 `127.0.0.1:18080`。
 
 ```text
