@@ -1,0 +1,89 @@
+# 架构、规则扩展与资源边界
+
+```text
+cmd/server                 组合根、HTTP 生命周期、清理定时器
+    ├── internal/httpapi   REST DTO/严格解析/CORS/错误映射
+    │       └── room 用例接口
+    ├── internal/room      房间/会话/权限/时钟/存储端口
+    │       └── game      命令与游戏规则
+    ├── internal/store/sqlite → room.Store（默认）
+    └── internal/store/memory → room.Store（测试/嵌入）
+
+examples/rules → game 的公开规则协议
+```
+
+## 游戏聚合
+
+`game.Game` 只维护一局游戏，不知道 HTTP、房间 ID、会话 token、数据库和锁。`Join` 用于大厅；`Apply(Command)` 处理状态机。时间由可信调用者通过 Command.At 提供，随机洗牌通过 Options.Shuffle 注入；默认使用 crypto/rand。
+
+每个操作按以下顺序执行：身份/阶段/回合与版本检查 → 候选状态拷贝 → 规则规划 → 效果范围验证 → 卡牌流动/回合更新 → 淘汰/胜负 → 一次提交。规则拒绝、洗牌失败和非法命令都不提交候选状态。事件只描述公开动作，不含摸到的牌或手牌。
+
+卡牌总量受 108 张约束，每房最多 10 人，规则最多 32 条。普通操作对本局状态做有界拷贝，无全局扫描或跨房间锁。这样使失败原子性与扩展规则隔离比局部手动回滚更容易验证；实际成本由 benchmark 测量。
+
+状态视图显式构造、拷贝：没有通过 `json:"-"` 隐藏字段后直接把聚合交给 JSON 编码的做法。规则 Context 同样只提供值或只读查询。不可变规则可以跨对局共享，带有可变内部状态的自定义规则必须自行处理并发，并避免在 Evaluate 中产生外部副作用。
+
+## 规则协议与优先级
+
+Rule 的唯一 ID 防止重复注册。Registry 是显式对象，工厂将一条 RuleSpec 的 JSON options 编译成不可变规则。Build 不持有 Registry 锁执行工厂，避免工厂阻塞全局注册/其他房间创建。
+
+`Evaluate` 在每种动作上执行，必须先检查 `ctx.Action()` 是否适用。Context 能查询出牌、顶部、当前颜色、罚牌、玩家手牌数量和是否有某颜色；不能写入聚合。Effects 提供：允许出牌、推进步数、反转、增加罚牌、让下家摸牌、手牌上限、保留颜色、质疑倍率、摸后可出牌。合法性由引擎最终检查，规则不能制造负摸牌或非法推进步数。
+
+列表顺序就是执行顺序。基础规则先提出匹配/动作效果，后续规则可细化它们；任意 veto 立即终止。纯效果计算使规则之间的先后关系显式可测试。一个典型扩展：
+
+```go
+registry := game.NewRegistry()
+if err := rules.Register(registry); err != nil { return err }
+store, err := sqlite.Open(sqlite.Config{
+    Path: "data/unour.db", MaxRooms: 1000,
+    Codec: room.NewCodec(registry, nil),
+})
+if err != nil { return err }
+defer store.Close()
+service, err := room.New(store, room.Config{Registry: registry})
+```
+
+其中 rules 是 `unour/examples/rules`，sqlite 是 `unour/internal/store/sqlite`。规则编解码器与房间服务必须使用同一套 Registry。然后在创建房间的 rules 列表末尾追加 `{"name":"no_zero"}` 即可。注入测试 Shuffle 时，也要同时传给 Codec 与 GameOptions；函数本身不写入快照。
+
+现有效果协议覆盖匹配限制、罚牌、跳过、转向、质疑和淘汰等 UNO 规则。交换手牌、插队或全新命令需要新增明确的领域效果/命令原语及相应不变量测试，再让规则组合使用；不开放任意状态指针，不以反射和通用 map 修改游戏内部字段。新的卡牌种类同样需要补充类型、牌堆及对应原语。这样扩展能力与卡牌守恒、回合约束能同时保留。
+
+## UNO 专用罚牌
+
+出牌从两张变成一张时，生成以该次提交版本为 ID 的窗口和服务器时间 +2 秒期限。声明和处罚均以本人的会话身份执行，不接受目标玩家参数。窗口记录保留最近的完成类型：同操作同窗口重复请求无副作用；声明与罚牌相互排斥。
+
+UNO 处罚不调用正常的 drawTurn，因此不改变当前回合或罚牌池。手牌因其他操作变化会取消旧窗口，结束比赛会关闭所有窗口。前端负责两秒交互与超时上报，后端不部署每玩家计时 goroutine。客户端漏报就不会自动补罚；若以后改为服务端权威定时罚牌，可在房间用例层新增统一调度，仍调用同一个领域命令。
+
+## 房间与存储
+
+Store 的 Record 是内部聚合，包含 Game、房主、令牌摘要和规则配置。引用只在回调期间使用，不能逃逸。Read 是只读用例；Transact 和 Delete 在同进程内串行处理同一房间。API State 使用 Read，不会重写游戏或延长 TTL。
+
+Memory 用目录 RWMutex 定位 entry 后立即释放目录锁，再获取单房间 Mutex。任何等待房间锁的代码都不持有目录锁；删除/回收的顺序则是先 entry 后目录，防止死锁。删除标记使已取到旧 entry 的等待者在删除后返回不存在，不会继续操作已失效的房间。回收使用 TryLock，跳过活跃回调；完成回调后再更新时间。
+
+Memory 的 Transact 不回滚任意 Record 写入；用例先完成可能失败的验证，Game 的变更由自身保证原子性。SQLite 每次从已提交行重建私有候选 Record，失败或 panic 丢弃候选，既不改数据库，也没有共享游戏缓存需要回滚。
+
+### 完整快照
+
+game.Checkpoint 和 room.RecordCodec 分别提供版本化游戏快照与房间封装。保存所有牌的身份/位置、回合、方向、当前颜色、罚牌、+4 出牌时的质疑证据、UNO 原期限与去重结果、胜者、游戏版本、开局参数、规则 ID、RuleSpec、房主、创建时间和会话摘要。Restore 校验卡牌与标准牌堆的完整对应关系、唯一身份、规则顺序和状态机约束。
+
+未来洗牌仍使用注入的 Shuffle 或默认密码学随机源；已有牌堆顺序原样恢复。规则是无状态的策略，由保存的 RuleSpec 与当前 Registry 重建。后续改变规则语义时需维护工厂/ID 的版本兼容性。未知快照/数据库版本、缺失规则和损坏数据均报错，不会丢弃房间后创建空状态。快照只供受信任存储使用，HTTP 始终返回过滤过的 View。
+
+### SQLite 提交与并发
+
+SQLite 采用 database/sql + go-sqlite3，WAL、synchronous=FULL、5 秒 busy_timeout。四个只读连接处理查询，单写连接只承担短事务提交。数据库路径按文件名编码，不拼接用户 SQL；所有查询参数化。
+
+每次写操作：获取可取消的房间键锁 → 加载已提交行 → 在数据库写锁之外执行回调与编码 → BEGIN IMMEDIATE → generation/revision CAS 更新 → Commit → 返回。不同房间的规则计算可以并行，SQLite 的物理写入按数据库限制串行。键锁按等待者引用计数回收，不为历史房间永久保留锁。
+
+generation 是创建时的随机身份，revision 是存储修订号，独立于对局 version。两者同时比较防止跨实例覆盖，也防止房间删除、同名重建后旧操作覆盖新房。竞争失败返回 409 version_conflict，不自动重复调用回调。容量检查与创建在同一写事务内完成。
+
+清理按最后成功写入时间查询，并通过 generation/revision/时间条件删除。本进程正在执行写回调的房间会跳过；其他进程与清理冲突时由 CAS 阻止旧数据复活。TTL 默认为 0，不启动自动清理。显式开启 TTL 后，读取不续期，停机时间计入期限。
+
+数据库 PRAGMA user_version 当前为 1；初始化 schema 在事务中执行，未知高版本拒绝启动。启动扫描并校验现存快照。文件权限为 0600，新建目录为 0700。此适配器支持本地文件部署；未来切换服务型数据库可复用 RecordCodec 与 Store.Read/Transact 边界，并实现相应的事务与冲突控制。
+
+连接与 WAL 的依据参见 [go-sqlite3](https://github.com/mattn/go-sqlite3)、[SQLite WAL](https://www.sqlite.org/wal.html)、[SQLite 事务](https://www.sqlite.org/lang_transaction.html)。
+
+## 网络与部署
+
+HTTP 适配器依赖 Rooms 用例接口。未来 WebSocket、RPC、机器人驱动都应依赖同一用例/领域命令，并返回按玩家过滤的 View。当前 REST 客户端通过 GET 状态同步，响应中的事件不是持久化消息队列。
+
+默认启动一个进程。日志记录 method/path/status/duration，不记录 Authorization 或请求体。CORS 允许来源显式配置，认证使用房间隔离的随机 Bearer token；没有外部用户账号、邀请口令或房间列表。房主身份由首次成功加入确定。
+
+对公网开放时，可在反向代理层接入 TLS、连接/请求速率限制，再按产品需要添加账号认证或房间邀请策略；这些机制可以放在适配器/房间用例边界，不改变 UNO 核心。

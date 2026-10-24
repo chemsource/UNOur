@@ -1,0 +1,111 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"unour/game"
+	"unour/internal/httpapi"
+	"unour/internal/room"
+	"unour/internal/store/sqlite"
+)
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg, err := loadConfig(os.Getenv)
+	if err == nil {
+		err = run(ctx, cfg, logger)
+	}
+	if err != nil {
+		logger.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
+	registry := game.NewRegistry()
+	store, err := sqlite.Open(sqlite.Config{Path: cfg.dbPath, MaxRooms: cfg.maxRooms, Codec: room.NewCodec(registry, nil)})
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, store.Close()) }()
+	rooms, err := room.New(store, room.Config{Registry: registry, TTL: cfg.roomTTL})
+	if err != nil {
+		return err
+	}
+	handler, err := httpapi.New(rooms, httpapi.Config{Logger: logger, AllowedOrigins: cfg.origins})
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	listener, err := net.Listen("tcp", cfg.addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
+	cleanupDone := make(chan struct{})
+	if cfg.roomTTL > 0 {
+		go func() { defer close(cleanupDone); sweepRooms(cleanupCtx, rooms, cfg.roomTTL, logger) }()
+	} else {
+		close(cleanupDone)
+	}
+	defer func() { cancelCleanup(); <-cleanupDone }()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+	logger.Info("UNO server listening", "address", listener.Addr().String(), "database", cfg.dbPath, "max_rooms", cfg.maxRooms, "room_ttl", cfg.roomTTL)
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		logger.Info("UNO server stopped")
+		return nil
+	}
+}
+
+func sweepRooms(ctx context.Context, rooms *room.Service, ttl time.Duration, logger *slog.Logger) {
+	interval := ttl / 4
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := rooms.Sweep(ctx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("room cleanup failed", "error", err)
+			} else if n > 0 {
+				logger.Info("idle rooms removed", "count", n)
+			}
+		}
+	}
+}

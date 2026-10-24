@@ -1,0 +1,11 @@
+.local/
+bin/
+coverage.out
+*.prof
+data/
+*.db
+*.db-wal
+*.db-shm
+/docs/superpowers/
+/docs/verification.md
+/docs/sqlite-verification.md
