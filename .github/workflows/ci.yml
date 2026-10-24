@@ -40,11 +40,13 @@ jobs:
         env:
           UNOUR_DEPLOY_KEY: ${{ secrets.UNOUR_DEPLOY_KEY }}
           UNOUR_KNOWN_HOSTS: ${{ secrets.UNOUR_KNOWN_HOSTS }}
+          UNOUR_DEPLOY_HOST: ${{ secrets.UNOUR_DEPLOY_HOST }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$UNOUR_DEPLOY_KEY"
           test -n "$UNOUR_KNOWN_HOSTS"
+          test -n "$UNOUR_DEPLOY_HOST"
           directory="$RUNNER_TEMP/unour-deploy"
           install -d -m 0700 "$directory"
           trap 'rm -rf "$directory"' EXIT
@@ -57,7 +59,7 @@ jobs:
           ssh -i "$directory/key" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$directory/known_hosts" \
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
-            unour-deploy@203.0.113.10 \
+            "unour-deploy@$UNOUR_DEPLOY_HOST" \
             "deploy $GITHUB_SHA $GITHUB_RUN_NUMBER $GITHUB_RUN_ATTEMPT $digest" \
             < "$directory/image.tar.gz"
           curl --fail --retry 5 --retry-all-errors --retry-delay 2 \

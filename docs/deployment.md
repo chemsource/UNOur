@@ -36,7 +36,7 @@ Compose 的 `UNO_TRUSTED_PROXIES` 只信任隔离 Docker 网络的私网代理�
 - 前端检出后端 main，实际启动 Go + 临时 SQLite，执行类型检查、测试、格式检查、生产构建和 Docker 构建。
 - 检查失败不发布。两仓独立更新各自镜像，共用服务器发布锁，避免互相覆盖；成功发布的 workflow run number 阻止旧任务覆盖新版本。
 
-每仓配置 `UNOUR_DEPLOY_KEY`、`UNOUR_KNOWN_HOSTS` 两个 Actions Secrets，分别保存组件专用 Ed25519 私钥和经过已验证 SSH 连接取得的服务器主机公钥。连接以专用 `unour-deploy` 用户强制校验主机密钥，不使用服务器密码。公钥使用 `restrict,command="sudo -n /usr/local/sbin/unour-ci-receive api"` 或 `web`，不能获得交互 shell、端口转发或发布另一个组件。
+每仓配置 `UNOUR_DEPLOY_HOST`、`UNOUR_DEPLOY_KEY`、`UNOUR_KNOWN_HOSTS` 三个 Actions Secrets，分别保存服务器地址、组件专用 Ed25519 私钥和经过已验证 SSH 连接取得的服务器主机公钥。工作流不写服务器 IP。连接以专用 `unour-deploy` 用户强制校验主机密钥，不使用服务器密码。公钥使用 `restrict,command="sudo -n /usr/local/sbin/unour-ci-receive api"` 或 `web`，不能获得交互 shell、端口转发或发布另一个组件。
 
 接收程序验证命令、上传大小及 SHA256，再载入镜像、备份 SQLite、原子更新 `.env` 对应版本，等待容器和应用健康。失败时恢复之前的镜像并返回错误。旧镜像和备份保留；数据库不自动恢复旧备份，数据库升级应向前、向后兼容。构建和测试均运行在 GitHub 托管 runner 上。
 
