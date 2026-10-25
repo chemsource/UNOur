@@ -219,7 +219,7 @@ func (g *Game) Apply(cmd Command) (Result, error) {
 
 // ApplyOwned is for a private simulation state with a single owner. It uses the
 // same validation and transition code as Apply. Only an infallible play without
-// follow-up draws reuses card storage in place; every operation that can fail
+// follow-up draws or recycling reuses card storage; every operation that can fail
 // after mutation retains Apply's copy-on-write rollback behavior.
 func (g *Game) ApplyOwned(cmd Command) (Result, error) {
 	return g.apply(cmd, true)
@@ -235,7 +235,7 @@ func (g *Game) apply(cmd Command, owned bool) (Result, error) {
 	}
 	idx := prepared.idx
 	var n state
-	if owned && cmd.Type == Play && prepared.effects.DrawNext == 0 {
+	if owned && cmd.Type == Play && prepared.effects.DrawNext == 0 && len(g.s.draw) > 0 {
 		n = g.s.forkOwnedPlay()
 	} else {
 		n = g.s.fork()
@@ -263,6 +263,13 @@ func (g *Game) apply(cmd Command, owned bool) (Result, error) {
 	}
 	n.enforceLimit(effects.HandLimit, &events)
 	n.settle(&events)
+	// Refill before returning a live state, including after the last card was
+	// drawn or an empty deck gained a recyclable discard through a play.
+	if n.phase == Playing {
+		if err := g.refillDrawPile(&n); err != nil {
+			return Result{}, err
+		}
+	}
 	n.version++
 	g.s = n
 	return Result{Version: n.version, Events: events}, nil

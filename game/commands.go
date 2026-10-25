@@ -188,15 +188,12 @@ func (g *Game) drawCards(s *state, idx, count int, events *[]Event) (int, error)
 	actual := 0
 	for actual < count {
 		if len(s.draw) == 0 {
-			if len(s.discard) <= 1 {
+			if err := g.refillDrawPile(s); err != nil {
+				return 0, err
+			}
+			if len(s.draw) == 0 {
 				break
 			}
-			top := s.discard[len(s.discard)-1]
-			s.draw = append([]Card(nil), s.discard[:len(s.discard)-1]...)
-			if err := g.shuffle(s.draw); err != nil {
-				return 0, &Error{Code: InternalFailure, Message: "could not recycle discard pile", Cause: err}
-			}
-			s.discard = []Card{top}
 		}
 		s.cancelUNO(idx)
 		s.players[idx].hand = append(s.players[idx].hand, s.draw[0])
@@ -205,6 +202,22 @@ func (g *Game) drawCards(s *state, idx, count int, events *[]Event) (int, error)
 	}
 	*events = append(*events, Event{Type: "drew", PlayerID: s.players[idx].id, Count: actual})
 	return actual, nil
+}
+
+// refillDrawPile preserves the exposed top and its chosen color. Only existing
+// discard cards are shuffled; hands and physical card identities never change.
+func (g *Game) refillDrawPile(s *state) error {
+	if len(s.draw) > 0 || len(s.discard) <= 1 {
+		return nil
+	}
+	top := s.discard[len(s.discard)-1]
+	recycled := append([]Card(nil), s.discard[:len(s.discard)-1]...)
+	if err := g.shuffle(recycled); err != nil {
+		return &Error{Code: InternalFailure, Message: "could not recycle discard pile", Cause: err}
+	}
+	s.draw = recycled
+	s.discard = []Card{top}
+	return nil
 }
 
 func (g *Game) drawTurn(s *state, idx int, e Effects, events *[]Event) error {
