@@ -93,16 +93,17 @@ func (s *Service) Login(ctx context.Context, name, password string) (Session, er
 	if err != nil {
 		return Session{}, err
 	}
-	if !verifyPassword(record.PasswordHash, password) {
+	if !verifyPassword(record.PasswordHash, password) || record.Disabled {
 		return Session{}, ErrCredentials
 	}
-	return s.session(ctx, record.Profile)
+	return s.session(ctx, record.Profile, record.CredentialVersion)
 }
-func (s *Service) session(ctx context.Context, user Profile) (Session, error) {
+func (s *Service) session(ctx context.Context, user Profile, version uint64) (Session, error) {
 	result, record, err := s.issueSession(user)
 	if err != nil {
 		return Session{}, err
 	}
+	record.CredentialVersion = version
 	if err := s.store.CreateAccountSession(ctx, record); err != nil {
 		return Session{}, err
 	}

@@ -11,6 +11,7 @@ import (
 
 	"unour/game"
 	"unour/internal/account"
+	"unour/internal/admin"
 	"unour/internal/room"
 )
 
@@ -80,6 +81,15 @@ func (h *handler) problem(w http.ResponseWriter, status int, code, message strin
 }
 
 func (h *handler) failure(w http.ResponseWriter, r *http.Request, err error) {
+	var privileged *admin.Error
+	if errors.As(err, &privileged) {
+		status := 401
+		if privileged.Code == "admin_csrf" {
+			status = 403
+		}
+		h.problem(w, status, privileged.Code, privileged.Message)
+		return
+	}
 	var auth *account.Error
 	if errors.As(err, &auth) {
 		status := 400

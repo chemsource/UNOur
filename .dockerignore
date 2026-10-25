@@ -12,3 +12,5 @@ docs
 *.db-shm
 *.prof
 coverage.out
+config
+*.admin.json

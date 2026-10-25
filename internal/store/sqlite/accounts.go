@@ -58,7 +58,7 @@ func (s *Store) AccountByName(ctx context.Context, key string) (account.Record, 
 	var r account.Record
 	var digest string
 	var created int64
-	err := s.read.QueryRowContext(ctx, `SELECT id,username,avatar_digest,created_at,username_key,password_hash FROM accounts WHERE username_key=?`, key).Scan(&r.Profile.ID, &r.Profile.Username, &digest, &created, &r.UsernameKey, &r.PasswordHash)
+	err := s.read.QueryRowContext(ctx, `SELECT id,username,avatar_digest,created_at,username_key,password_hash,disabled,credential_version FROM accounts WHERE username_key=?`, key).Scan(&r.Profile.ID, &r.Profile.Username, &digest, &created, &r.UsernameKey, &r.PasswordHash, &r.Disabled, &r.CredentialVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, account.ErrNotFound
 	}
@@ -106,6 +106,14 @@ func (s *Store) CreateAccountSession(ctx context.Context, r account.SessionRecor
 		return err
 	}
 	defer tx.Rollback()
+	// A login verified outside this transaction cannot race a ban/reset/revoke.
+	var enabled int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE id=? AND disabled=0 AND credential_version=?`, r.AccountID, r.CredentialVersion).Scan(&enabled); err != nil {
+		return err
+	}
+	if enabled != 1 {
+		return account.ErrCredentials
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM account_sessions WHERE expires_at<=?`, r.CreatedAt.UnixMilli()); err != nil {
 		return err
 	}
@@ -119,7 +127,7 @@ func (s *Store) CreateAccountSession(ctx context.Context, r account.SessionRecor
 	return tx.Commit()
 }
 func (s *Store) SessionAccount(ctx context.Context, digest [32]byte, now time.Time) (account.Profile, error) {
-	p, err := scanProfile(s.read.QueryRowContext(ctx, `SELECT a.id,a.username,a.avatar_digest,a.created_at FROM account_sessions s JOIN accounts a ON a.id=s.account_id WHERE s.digest=? AND s.expires_at>?`, digest[:], now.UnixMilli()))
+	p, err := scanProfile(s.read.QueryRowContext(ctx, `SELECT a.id,a.username,a.avatar_digest,a.created_at FROM account_sessions s JOIN accounts a ON a.id=s.account_id WHERE s.digest=? AND s.expires_at>? AND a.disabled=0`, digest[:], now.UnixMilli()))
 	if errors.Is(err, account.ErrNotFound) {
 		return p, account.ErrUnauthorized
 	}

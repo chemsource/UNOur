@@ -137,7 +137,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 3 || version < 0 {
+	if version > 4 || version < 0 {
 		return fmt.Errorf("unsupported SQLite schema version %d", version)
 	}
 	if version == 0 {
@@ -174,6 +174,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("migrate computer schedule: %w", err)
+			}
+		}
+	}
+	if version < 4 {
+		for _, statement := range []string{
+			`ALTER TABLE accounts ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1))`,
+			`ALTER TABLE accounts ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0 CHECK(credential_version>=0)`,
+			`CREATE TABLE admin_audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL)`,
+			`PRAGMA user_version=4`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migrate administration schema: %w", err)
 			}
 		}
 	}

@@ -200,8 +200,9 @@ type attempt struct {
 	reset time.Time
 }
 type attemptLimiter struct {
-	mu      sync.Mutex
-	entries map[string]attempt
+	maxCount int
+	mu       sync.Mutex
+	entries  map[string]attempt
 }
 
 func (l *attemptLimiter) allow(key string, now time.Time) bool {
@@ -224,7 +225,11 @@ func (l *attemptLimiter) allow(key string, now time.Time) bool {
 	if !now.Before(a.reset) {
 		a = attempt{reset: now.Add(5 * time.Minute)}
 	}
-	if a.count >= 20 {
+	maximum := l.maxCount
+	if maximum == 0 {
+		maximum = 20
+	}
+	if a.count >= maximum {
 		return false
 	}
 	a.count++

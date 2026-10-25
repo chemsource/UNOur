@@ -31,14 +31,17 @@ type Profile struct {
 
 // Record is private storage data and must never be serialized to an API response.
 type Record struct {
-	Profile      Profile
-	UsernameKey  string
-	PasswordHash string
+	Profile           Profile
+	UsernameKey       string
+	PasswordHash      string
+	Disabled          bool
+	CredentialVersion uint64
 }
 type SessionRecord struct {
 	Digest               [32]byte
 	AccountID            string
 	CreatedAt, ExpiresAt time.Time
+	CredentialVersion    uint64
 }
 type Store interface {
 	// CreateAccount atomically persists the identity and its initial session.

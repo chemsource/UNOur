@@ -5,6 +5,7 @@ run:
 
 build:
 	go build -buildvcs=false -trimpath -o bin/uno-server ./cmd/server
+	go build -buildvcs=false -trimpath -o bin/unour-admin-config ./cmd/admin-config
 
 test:
 	go test ./...

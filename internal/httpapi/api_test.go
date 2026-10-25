@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 	"unour/internal/account"
+	"unour/internal/admin"
 
 	"unour/game"
 	"unour/internal/httpapi"
@@ -29,6 +30,9 @@ type client struct {
 }
 
 func setup(t *testing.T) *client {
+	return setupAdmin(t, false)
+}
+func setupAdmin(t *testing.T, enabled bool) *client {
 	t.Helper()
 	c := &client{t: t, now: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
 	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "http.db"), MaxRooms: 10, Now: func() time.Time { return c.now }, Codec: room.NewCodec(nil, func([]game.Card) error { return nil })})
@@ -54,7 +58,23 @@ func setup(t *testing.T) *client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.handler, err = httpapi.New(s, httpapi.Config{Accounts: accounts, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{"http://localhost:5173"}})
+	cfg := httpapi.Config{Accounts: accounts, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{"http://localhost:5173"}}
+	if enabled {
+		path := filepath.Join(t.TempDir(), "admin.json")
+		if err := admin.WriteConfig(path, "admin password for tests"); err != nil {
+			t.Fatal(err)
+		}
+		config, err := admin.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions, err := admin.New(config, func() time.Time { return c.now })
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Admin = &httpapi.Administration{Sessions: sessions, Users: account.NewManager(store), Rooms: room.NewManager(s, store), Audit: store}
+	}
+	c.handler, err = httpapi.New(s, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

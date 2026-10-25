@@ -79,7 +79,7 @@ generation 是创建时的随机身份，revision 是存储修订号，独立于
 
 清理按最后成功写入时间查询，并通过 generation/revision/时间条件删除。本进程正在执行写回调的房间会跳过；其他进程与清理冲突时由 CAS 阻止旧数据复活。TTL 默认为 0，不启动自动清理。显式开启 TTL 后，读取不续期，停机时间计入期限。
 
-数据库 PRAGMA user_version 当前为 3；初始化 schema 在事务中执行，未知高版本拒绝启动。启动扫描并校验现存快照和电脑调度投影。文件权限为 0600，新建目录为 0700。此适配器支持本地文件部署；未来切换服务型数据库可复用 RecordCodec 与 Store.Read/Transact 边界，并实现相应的事务与冲突控制。
+数据库 PRAGMA user_version 当前为 4；初始化 schema 在事务中执行，未知高版本拒绝启动。启动扫描并校验现存快照和电脑调度投影。文件权限为 0600，新建目录为 0700。此适配器支持本地文件部署；未来切换服务型数据库可复用 RecordCodec 与 Store.Read/Transact 边界，并实现相应的事务与冲突控制。
 
 连接与 WAL 的依据参见 [go-sqlite3](https://github.com/mattn/go-sqlite3)、[SQLite WAL](https://www.sqlite.org/wal.html)、[SQLite 事务](https://www.sqlite.org/lang_transaction.html)。
 
@@ -114,3 +114,10 @@ HTTP 先验证 HttpOnly Cookie，再校验可选 X-Account-ID 以防浏览器标
 房间成员和当前局座位分开保存。Spectators 表达观战与下局预约，Departed 保留当前局退出者的牌数守恒所需状态。规则引擎提供原子 Rematch 和 Leave，账户认证、同意名单、主持权和生命周期属于 room 层，HTTP 仅做字段解析和身份适配。
 
 再来一局使用 round 与 roster_version 拒绝跨局或旧名单的同意；报名/退出改变名单时撤销已有同意，纯观战变化不会撤销。最后一票和重新发牌同事务提交，电脑记忆和调度一起重置。Game 的版本跨局单调递增；房间 revision 汇总牌局和成员变化，防止轮询旧响应覆盖新投票。Codec 校验身份互斥、席位容量、离开者凭证撤销和投票资格，持久化所有生命周期字段。
+
+
+## 管理边界
+
+`internal/admin` 读取私有密码哈希文件，管理独立且短期的内存会话；`internal/credential` 共享既有密码哈希格式。账户管理通过单独的 ManagementStore 端口更新封禁状态、凭证版本和会话，房间管理通过 AdministrationStore 端口进行完整手牌读取和带审计的事务。玩家接口不依赖这些管理端口，也不复用管理 DTO。
+
+引擎的可信 `EditCards` 仅交换或移动既有牌，不允许改写牌值、弃牌或淘汰玩家，所有操作保留牌组守恒。房间版本使旧 bot 计算失效，公开记忆重置后继续从正常观察学习；审计与房间快照同事务提交。管理会话与密码哈希不会序列化进房间或公共资料。

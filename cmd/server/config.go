@@ -17,10 +17,17 @@ type config struct {
 	origins        []string
 	trustedProxies []netip.Prefix
 	dbPath         string
+	adminConfig    string
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
 	cfg := config{addr: ":8088", maxRooms: 1000, dbPath: "data/unour.db"}
+	if path := getenv("UNO_ADMIN_CONFIG"); path != "" {
+		if strings.TrimSpace(path) == "" {
+			return config{}, fmt.Errorf("UNO_ADMIN_CONFIG must be a private configuration file path")
+		}
+		cfg.adminConfig = path
+	}
 	if value := getenv("UNO_TRUSTED_PROXIES"); value != "" {
 		for _, part := range strings.Split(value, ",") {
 			prefix, err := netip.ParsePrefix(strings.TrimSpace(part))

@@ -7,6 +7,7 @@ COPY cmd ./cmd
 COPY game ./game
 COPY internal ./internal
 RUN CGO_ENABLED=1 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/uno-server ./cmd/server
+RUN CGO_ENABLED=1 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/unour-admin-config ./cmd/admin-config
 
 FROM alpine:3.24
 RUN apk add --no-cache ca-certificates sqlite \
@@ -15,6 +16,7 @@ RUN apk add --no-cache ca-certificates sqlite \
     && mkdir /data \
     && chown unour:unour /data
 COPY --from=build /out/uno-server /usr/local/bin/uno-server
+COPY --from=build /out/unour-admin-config /usr/local/bin/unour-admin-config
 USER unour:unour
 WORKDIR /data
 ENV UNO_ADDR=:8088 UNO_DB_PATH=/data/unour.db

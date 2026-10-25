@@ -14,6 +14,7 @@ services:
       UNO_TRUSTED_PROXIES: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
       UNO_MAX_ROOMS: ${UNO_MAX_ROOMS:-1000}
       UNO_ROOM_TTL: "0"
+      UNO_ADMIN_CONFIG: ${UNO_ADMIN_CONFIG:-}
       GOMEMLIMIT: 600MiB
     volumes:
       - data:/data

@@ -30,6 +30,7 @@ type Rooms interface {
 }
 
 type Config struct {
+	Admin          *Administration
 	Accounts       *account.Service
 	SecureCookies  bool
 	Logger         *slog.Logger
@@ -37,14 +38,17 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 }
 type handler struct {
-	accounts       *account.Service
-	secureCookies  bool
-	loginLimit     attemptLimiter
-	credentials    chan struct{}
-	rooms          Rooms
-	logger         *slog.Logger
-	origins        map[string]bool
-	trustedProxies []netip.Prefix
+	admin            *Administration
+	adminLimit       attemptLimiter
+	adminCredentials chan struct{}
+	accounts         *account.Service
+	secureCookies    bool
+	loginLimit       attemptLimiter
+	credentials      chan struct{}
+	rooms            Rooms
+	logger           *slog.Logger
+	origins          map[string]bool
+	trustedProxies   []netip.Prefix
 }
 
 func New(rooms Rooms, cfg Config) (http.Handler, error) {
@@ -56,6 +60,15 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 	}
 	h := &handler{rooms: rooms, accounts: cfg.Accounts, secureCookies: cfg.SecureCookies, credentials: make(chan struct{}, 4), logger: cfg.Logger, origins: make(map[string]bool)}
 	h.trustedProxies = append([]netip.Prefix(nil), cfg.TrustedProxies...)
+	if cfg.Admin != nil {
+		if cfg.Admin.Sessions == nil || cfg.Admin.Users == nil || cfg.Admin.Rooms == nil || cfg.Admin.Audit == nil {
+			return nil, fmt.Errorf("all administration services are required when enabled")
+		}
+		copy := *cfg.Admin
+		h.admin = &copy
+		h.adminLimit.maxCount = 5
+		h.adminCredentials = make(chan struct{}, 2)
+	}
 	for _, origin := range cfg.AllowedOrigins {
 		u, err := url.Parse(origin)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -64,6 +77,9 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 		h.origins[origin] = true
 	}
 	mux := http.NewServeMux()
+	if h.admin != nil {
+		h.registerAdmin(mux)
+	}
 	mux.HandleFunc("/healthz", h.only("GET", func(w http.ResponseWriter, r *http.Request) { h.json(w, 200, map[string]string{"status": "ok"}) }))
 	mux.HandleFunc("/api/v1/auth/register", h.only("POST", h.credentialsEndpoint(true)))
 	mux.HandleFunc("/api/v1/auth/login", h.only("POST", h.credentialsEndpoint(false)))

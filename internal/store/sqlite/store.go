@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"unour/game"
+	"unour/internal/audit"
 	"unour/internal/room"
 )
 
@@ -97,6 +98,14 @@ func (s *Store) Read(ctx context.Context, id string, fn func(*room.Record) error
 }
 
 func (s *Store) Transact(ctx context.Context, id string, fn func(*room.Record) error) error {
+	return s.transact(ctx, id, fn, nil)
+}
+
+func (s *Store) TransactAudited(ctx context.Context, id string, fn func(*room.Record) error, entry audit.Entry) error {
+	return s.transact(ctx, id, fn, &entry)
+}
+
+func (s *Store) transact(ctx context.Context, id string, fn func(*room.Record) error, entry *audit.Entry) error {
 	unlock, _, err := s.locks.acquire(ctx, id, false)
 	if err != nil {
 		return err
@@ -124,6 +133,11 @@ func (s *Store) Transact(ctx context.Context, id string, fn func(*room.Record) e
 	}
 	if err := affected(ctx, tx, id, result); err != nil {
 		return err
+	}
+	if entry != nil {
+		if err := insertAudit(ctx, tx, *entry); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

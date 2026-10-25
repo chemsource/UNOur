@@ -15,3 +15,5 @@ backups/
 /docs/superpowers/
 /docs/verification.md
 /docs/sqlite-verification.md
+/config/
+*.admin.json

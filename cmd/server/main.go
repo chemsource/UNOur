@@ -14,6 +14,7 @@ import (
 
 	"unour/game"
 	"unour/internal/account"
+	"unour/internal/admin"
 	"unour/internal/bot"
 	"unour/internal/botrunner"
 	"unour/internal/httpapi"
@@ -36,6 +37,17 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
+	var adminSessions *admin.Service
+	if cfg.adminConfig != "" {
+		adminCfg, err := admin.LoadConfig(cfg.adminConfig)
+		if err != nil {
+			return err
+		}
+		adminSessions, err = admin.New(adminCfg, nil)
+		if err != nil {
+			return err
+		}
+	}
 	registry := game.NewRegistry()
 	store, err := sqlite.Open(sqlite.Config{Path: cfg.dbPath, MaxRooms: cfg.maxRooms, Codec: room.NewCodec(registry, nil)})
 	if err != nil {
@@ -54,7 +66,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	handler, err := httpapi.New(rooms, httpapi.Config{Accounts: accounts, SecureCookies: cfg.secureCookies, Logger: logger, AllowedOrigins: cfg.origins, TrustedProxies: cfg.trustedProxies})
+	apiConfig := httpapi.Config{Accounts: accounts, SecureCookies: cfg.secureCookies, Logger: logger, AllowedOrigins: cfg.origins, TrustedProxies: cfg.trustedProxies}
+	if adminSessions != nil {
+		apiConfig.Admin = &httpapi.Administration{Sessions: adminSessions, Users: account.NewManager(store), Rooms: room.NewManager(rooms, store), Audit: store}
+	}
+	handler, err := httpapi.New(rooms, apiConfig)
 	if err != nil {
 		return err
 	}

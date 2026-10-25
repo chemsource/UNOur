@@ -71,7 +71,7 @@ func TestSchemaTwoUpgradePreservesHumanRoomsWithoutBotJobs(t *testing.T) {
 	if err := store.Create(ctx, "human", emptyRecord(t)); err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{`DROP INDEX rooms_next_bot_at`, `ALTER TABLE rooms DROP COLUMN next_bot_at`, `PRAGMA user_version=2`} {
+	for _, statement := range []string{`DROP INDEX rooms_next_bot_at`, `ALTER TABLE rooms DROP COLUMN next_bot_at`, `DROP TABLE admin_audit`, `ALTER TABLE accounts DROP COLUMN disabled`, `ALTER TABLE accounts DROP COLUMN credential_version`, `PRAGMA user_version=2`} {
 		if _, err := store.write.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestSchemaTwoUpgradePreservesHumanRoomsWithoutBotJobs(t *testing.T) {
 	}
 	store = openTest(t, path, nil, 10)
 	var version int
-	if err := store.read.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
+	if err := store.read.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 4 {
 		t.Fatal("schema not upgraded", version, err)
 	}
 	if err := store.Read(ctx, "human", func(r *room.Record) error {

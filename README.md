@@ -29,6 +29,9 @@ go run -buildvcs=false ./cmd/server
 | `UNO_SECURE_COOKIES` | `false` | HTTPS 反向代理部署时设为 `true`；服务直接接收 TLS 时自动启用 Secure |
 | `UNO_ALLOWED_ORIGINS` | 空 | 逗号分隔的完整 origin，例如 `https://uno.example.com`，无结尾 `/` |
 | `UNO_TRUSTED_PROXIES` | 空 | 允许提供 `X-Real-IP` 的代理 CIDR，逗号分隔；默认忽略所有转发地址头 |
+| `UNO_ADMIN_CONFIG` | 空（管理接口关闭） | 私有管理员 JSON 配置文件路径，须为 0600 或 0400，内容由配置工具生成 |
+
+管理员通过手动访问 `/admin` 登录，游戏页面没有管理入口。支持搜索用户、封禁/解封、强制退出、重置用户密码，以及查看实时完整手牌、替换和移牌。启用步骤和安全边界见 [管理后台](docs/admin.md)。
 
 `GET /healthz` 返回 `{"status":"ok"}`。服务有请求超时、请求体上限、结构化日志、SIGINT/SIGTERM 优雅退出和空闲房间回收。
 
