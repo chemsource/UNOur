@@ -1,0 +1,16 @@
+{
+  "name": "no_zero",
+  "version": 1,
+  "order": 100,
+  "title": "禁止出零",
+  "group": "扩展规则",
+  "description": "开启后禁止打出数字 0，其他出牌沿用本局设置。",
+  "default_enabled": false,
+  "steps": [
+    {
+      "when": "action == \"play\" && card.kind == \"number\" && card.number == 0",
+      "reject": "本局禁止打出数字 0。"
+    }
+  ],
+  "summary": [{ "text": "本局禁止打出数字 0。" }]
+}

@@ -147,3 +147,11 @@ func TestRoomIdleTTL(t *testing.T) {
 		t.Fatalf("expired room exists: %v", err)
 	}
 }
+
+func TestCreateRejectsAnUnstartableConfiguredHandLimit(t *testing.T) {
+	s := service(t, 10, nil)
+	specs := append(game.DefaultRuleSpecs(), game.RuleSpec{Name: "hand_limit", Options: []byte(`{"limit":4}`)})
+	if _, err := s.Create(context.Background(), room.CreateRequest{ID: "bad-limit", Rules: specs}); err == nil {
+		t.Fatal("created a room whose hand limit is below the standard initial hand")
+	}
+}

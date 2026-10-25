@@ -49,7 +49,14 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
 		}
 	}
 	registry := game.NewRegistry()
-	store, err := sqlite.Open(sqlite.Config{Path: cfg.dbPath, MaxRooms: cfg.maxRooms, Codec: room.NewCodec(registry, nil)})
+	if cfg.rulesDir != "" {
+		loaded, err := game.LoadRuleRegistry(os.DirFS(cfg.rulesDir))
+		if err != nil {
+			return fmt.Errorf("load rule directory: %w", err)
+		}
+		registry = loaded
+	}
+	store, err := sqlite.Open(sqlite.Config{Path: cfg.dbPath, MaxRooms: cfg.maxRooms, Codec: room.NewCodec(nil)})
 	if err != nil {
 		return err
 	}
@@ -80,6 +87,19 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
+	reloadCtx, cancelReload := context.WithCancel(ctx)
+	reloadDone := make(chan struct{})
+	reloadSignals := make(chan os.Signal, 1)
+	if cfg.rulesDir != "" {
+		signal.Notify(reloadSignals, syscall.SIGHUP)
+		go func() {
+			defer close(reloadDone)
+			watchRuleReloads(reloadCtx, reloadSignals, registry, cfg.rulesDir, logger)
+		}()
+	} else {
+		close(reloadDone)
+	}
+	defer func() { signal.Stop(reloadSignals); cancelReload(); <-reloadDone }()
 	botCtx, cancelBots := context.WithCancel(ctx)
 	botDone := make(chan struct{})
 	go func() { defer close(botDone); _ = computers.Run(botCtx) }()
@@ -136,6 +156,21 @@ func sweepRooms(ctx context.Context, rooms *room.Service, ttl time.Duration, log
 				logger.Error("room cleanup failed", "error", err)
 			} else if n > 0 {
 				logger.Info("idle rooms removed", "count", n)
+			}
+		}
+	}
+}
+
+func watchRuleReloads(ctx context.Context, signals <-chan os.Signal, registry *game.Registry, directory string, logger *slog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-signals:
+			if err := registry.Reload(os.DirFS(directory)); err != nil {
+				logger.Error("rule reload rejected; previous catalog retained", "error", err)
+			} else {
+				logger.Info("rule catalog reloaded", "revision", registry.Catalog().Revision)
 			}
 		}
 	}

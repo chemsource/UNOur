@@ -27,6 +27,7 @@ type Checkpoint struct {
 	Winner        PlayerID             `json:"winner"`
 	MaxPlayers    int                  `json:"max_players"`
 	InitialHand   int                  `json:"initial_hand"`
+	RuleModules   []RuleModule         `json:"rule_modules,omitempty"`
 	RuleIDs       []string             `json:"rule_ids"`
 }
 
@@ -46,10 +47,11 @@ type ChallengeCheckpoint struct {
 }
 
 // Checkpoint returns detached data, including all state needed for replay-safe
-// UNO penalties and challenges. Rules are reconstructed from stored RuleSpecs.
+// UNO penalties and challenges. Rules include their frozen, data-only module definitions.
 func (g *Game) Checkpoint() Checkpoint {
 	s := g.s.clone()
 	cp := Checkpoint{FormatVersion: checkpointFormat, Version: s.version, Phase: s.phase, Deck: s.draw, Discard: s.discard, TurnIndex: s.turn, Direction: s.direction, ActiveColor: s.active, PendingDraw: s.pending, PendingKind: s.pendingKind, DrawnCardID: s.drawnCard, Winner: s.winner, MaxPlayers: g.maxPlayers, InitialHand: g.initialHand, Players: make([]PlayerCheckpoint, 0, len(s.players)), RuleIDs: make([]string, 0, len(g.rules.rules))}
+	cp.RuleModules = g.RuleModules()
 	for _, p := range s.players {
 		cp.Players = append(cp.Players, PlayerCheckpoint{ID: p.id, Name: p.name, Hand: p.hand, Eliminated: p.eliminated, UNO: p.uno, LastUNO: p.lastUNO, LastUNOAction: p.lastUNOAction})
 	}

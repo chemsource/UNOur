@@ -1,0 +1,90 @@
+{
+  "name": "actions",
+  "version": 1,
+  "order": 20,
+  "title": "动作牌",
+  "group": "基本规则",
+  "required": true,
+  "default_enabled": true,
+  "description": "设置禁牌、反转与万能牌的效果。",
+  "options": [
+    {
+      "key": "skip_draw",
+      "type": "boolean",
+      "label": "允许禁后摸牌",
+      "default": false,
+      "description": "被跳过的玩家额外摸一张牌。"
+    },
+    {
+      "key": "keep_color",
+      "type": "boolean",
+      "label": "允许转色后颜色不变",
+      "default": false,
+      "description": "关闭时，万能牌必须选择其他颜色。"
+    }
+  ],
+  "steps": [
+    {
+      "when": "action == \"play\"",
+      "set": {
+        "keep_color": "options.keep_color"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"skip\"",
+      "set": {
+        "turn_steps": "2"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"skip\" && options.skip_draw",
+      "set": {
+        "draw_next": "1"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"reverse\"",
+      "set": {
+        "reverse": "true"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"reverse\" && alive_players == 2 && pending_draw == 0",
+      "set": {
+        "turn_steps": "2"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"draw_two\"",
+      "set": {
+        "add_penalty": "2"
+      }
+    },
+    {
+      "when": "action == \"play\" && card.kind == \"wild_draw_four\"",
+      "set": {
+        "add_penalty": "4"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "禁牌跳过下家。"
+    },
+    {
+      "text": "被跳过者额外摸一张牌。",
+      "when": "options.skip_draw"
+    },
+    {
+      "text": "万能牌可以保留当前颜色。",
+      "when": "options.keep_color"
+    },
+    {
+      "text": "万能牌必须选择其他颜色。",
+      "when": "!options.keep_color"
+    },
+    {
+      "text": "两人局的普通反转等同跳过；承受罚牌时按本局叠加配置处理。"
+    }
+  ]
+}

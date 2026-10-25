@@ -33,6 +33,9 @@ func (g *Game) validateStart(e Effects) error {
 }
 
 func validatePlay(s *state, cmd Command, card Card, e Effects) (Color, error) {
+	if s.pending > 0 && s.finishingPlayer() != "" {
+		return "", fail(InvalidState, "the round is closing; settle the penalty or challenge instead of playing")
+	}
 	if s.drawnCard != 0 && s.drawnCard != cmd.CardID && !e.PlayAnyAfterDraw {
 		return "", fail(CardNotPlayable, "only the card just drawn can be played")
 	}

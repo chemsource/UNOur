@@ -68,14 +68,14 @@ func TestLegalActionsUseEngineForPenaltyPassAndChallenge(t *testing.T) {
 	}
 }
 
-func TestFinalPenaltyDoesNotShortCircuitSearch(t *testing.T) {
-	_, obs := fixture(t, [][]int{{24}, {26, 27}}, []int{4}, nil, nil)
+func TestFinalChallengeableDrawFourDoesNotShortCircuitSearch(t *testing.T) {
+	_, obs := fixture(t, [][]int{{102}, {26, 27}}, []int{4}, nil, nil)
 	d, err := New(nil).Decide(context.Background(), obs, Profile{Normal, Balanced}, SearchConfig{Seed: 10, MaxIterations: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Iterations != 12 {
-		t.Fatalf("last penalty was treated as immediate win: %+v", d)
+		t.Fatalf("challengeable last +4 was treated as immediate win: %+v", d)
 	}
 }
 
@@ -219,5 +219,16 @@ func TestRolloutStepFindsLegalMoveWithoutMutatingInput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(g.Checkpoint(), before) {
 		t.Fatal("rollout changed input")
+	}
+}
+
+func TestFinalDrawTwoSettlesAsAnImmediateWinningDecision(t *testing.T) {
+	_, obs := fixture(t, [][]int{{24}, {26, 27}}, []int{4}, nil, nil)
+	decision, err := New(nil).Decide(context.Background(), obs, Profile{Normal, Balanced}, SearchConfig{Seed: 10, MaxIterations: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Command.Type != game.Play || decision.Command.CardID != 24 || decision.Iterations != 0 {
+		t.Fatal("bot did not recognize final penalty settlement", decision)
 	}
 }

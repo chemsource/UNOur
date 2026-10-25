@@ -40,7 +40,7 @@ func Open(cfg Config) (*Store, error) {
 		cfg.Now = time.Now
 	}
 	if cfg.Codec == nil {
-		cfg.Codec = room.NewCodec(nil, nil)
+		cfg.Codec = room.NewCodec(nil)
 	}
 	path, err := filepath.Abs(cfg.Path)
 	if err != nil {

@@ -35,7 +35,7 @@ func setup(t *testing.T) *client {
 func setupAdmin(t *testing.T, enabled bool) *client {
 	t.Helper()
 	c := &client{t: t, now: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
-	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "http.db"), MaxRooms: 10, Now: func() time.Time { return c.now }, Codec: room.NewCodec(nil, func([]game.Card) error { return nil })})
+	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "http.db"), MaxRooms: 10, Now: func() time.Time { return c.now }, Codec: room.NewCodec(func([]game.Card) error { return nil })})
 	if err != nil {
 		t.Fatal(err)
 	}

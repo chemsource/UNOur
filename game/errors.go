@@ -5,17 +5,18 @@ import "fmt"
 type Code string
 
 const (
-	InvalidInput     Code = "invalid_input"
-	InvalidState     Code = "invalid_state"
-	NotYourTurn      Code = "not_your_turn"
-	CardNotOwned     Code = "card_not_owned"
-	CardNotPlayable  Code = "card_not_playable"
-	RuleViolation    Code = "rule_violation"
-	VersionConflict  Code = "version_conflict"
-	UNOTooEarly      Code = "uno_too_early"
-	UNOExpired       Code = "uno_expired"
-	UNOWindowInvalid Code = "uno_window_invalid"
-	InternalFailure  Code = "internal_error"
+	RuleCatalogChanged Code = "rule_catalog_changed"
+	InvalidInput       Code = "invalid_input"
+	InvalidState       Code = "invalid_state"
+	NotYourTurn        Code = "not_your_turn"
+	CardNotOwned       Code = "card_not_owned"
+	CardNotPlayable    Code = "card_not_playable"
+	RuleViolation      Code = "rule_violation"
+	VersionConflict    Code = "version_conflict"
+	UNOTooEarly        Code = "uno_too_early"
+	UNOExpired         Code = "uno_expired"
+	UNOWindowInvalid   Code = "uno_window_invalid"
+	InternalFailure    Code = "internal_error"
 )
 
 // Error is a stable domain failure; Cause is diagnostic and never part of JSON.

@@ -44,7 +44,7 @@ func TestClientIPTrustsOnlyConfiguredProxyPeers(t *testing.T) {
 }
 
 func TestCredentialLimiterSeparatesClientsBehindTrustedProxy(t *testing.T) {
-	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "proxy.db"), MaxRooms: 1, Codec: room.NewCodec(nil, nil)})
+	store, err := sqlite.Open(sqlite.Config{Path: filepath.Join(t.TempDir(), "proxy.db"), MaxRooms: 1, Codec: room.NewCodec(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}

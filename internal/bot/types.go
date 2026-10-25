@@ -44,9 +44,10 @@ type Memory struct {
 	ChallengeColor game.Color    `json:"challenge_color,omitempty"`
 }
 type Observation struct {
-	View   game.View
-	Memory Memory
-	Rules  []game.RuleSpec
+	RuleModules []game.RuleModule
+	View        game.View
+	Memory      Memory
+	Rules       []game.RuleSpec
 }
 type SearchConfig struct {
 	Seed          uint64

@@ -1,0 +1,32 @@
+{
+  "name": "hand_limit",
+  "version": 1,
+  "order": 60,
+  "title": "手牌上限",
+  "group": "可选规则",
+  "default_enabled": false,
+  "description": "手牌达到设定数量时淘汰；上限应高于初始手牌数。",
+  "options": [
+    {
+      "key": "limit",
+      "type": "integer",
+      "label": "淘汰手牌数",
+      "default": 25,
+      "min": 8,
+      "max": 108,
+      "description": "标准开局每人 7 张，淘汰上限至少为 8。"
+    }
+  ],
+  "steps": [
+    {
+      "set": {
+        "hand_limit": "options.limit"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "手牌达到 {{limit}} 张时淘汰。"
+    }
+  ]
+}

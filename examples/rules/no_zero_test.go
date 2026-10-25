@@ -2,17 +2,40 @@ package rules_test
 
 import (
 	"context"
+	"io/fs"
+	"os"
 	"testing"
+	"testing/fstest"
 
-	example "unour/examples/rules"
 	"unour/game"
 	"unour/internal/room"
 	"unour/internal/store/memory"
+	configfiles "unour/rules"
 )
 
 func TestExtensionRunsThroughTheRealRoomService(t *testing.T) {
-	registry := game.NewRegistry()
-	if err := example.Register(registry); err != nil {
+	source := fstest.MapFS{}
+	entries, err := fs.ReadDir(configfiles.Files, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(configfiles.Files, entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		source[entry.Name()] = &fstest.MapFile{Data: data}
+	}
+	data, err := os.ReadFile("no_zero.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source["no_zero.json"] = &fstest.MapFile{Data: data}
+	registry, err := game.LoadRuleRegistry(source)
+	if err != nil {
 		t.Fatal(err)
 	}
 	store, err := memory.New(memory.Config{MaxRooms: 1})

@@ -9,26 +9,29 @@ type PlayerView struct {
 	UNO        *UNOWindow `json:"uno,omitempty"`
 	// UNODeclared identifies the last successfully declared window. Unlike UNO,
 	// it remains visible after resolution so polling clients cannot miss the call.
-	UNODeclared uint64 `json:"uno_declared,omitempty"`
+	UNODeclared  uint64 `json:"uno_declared,omitempty"`
+	UNOPenalized uint64 `json:"uno_penalized,omitempty"`
 }
 
 type View struct {
-	Phase           Phase        `json:"phase"`
-	Version         uint64       `json:"version"`
-	You             PlayerID     `json:"you,omitempty"`
-	Players         []PlayerView `json:"players"`
-	Turn            PlayerID     `json:"turn,omitempty"`
-	Direction       int          `json:"direction"`
-	TopCard         *Card        `json:"top_card,omitempty"`
-	ActiveColor     Color        `json:"active_color,omitempty"`
-	DrawPileCount   int          `json:"draw_pile_count"`
-	DiscardCount    int          `json:"discard_count"`
-	PendingDraw     int          `json:"pending_draw"`
-	PendingDrawKind Kind         `json:"pending_draw_kind,omitempty"`
-	ChallengeTarget PlayerID     `json:"challenge_target,omitempty"`
-	DrawnCardID     int          `json:"drawn_card_id,omitempty"`
-	CanPass         bool         `json:"can_pass"`
-	Winner          PlayerID     `json:"winner,omitempty"`
+	LegalActions    []LegalAction `json:"legal_actions"`
+	Phase           Phase         `json:"phase"`
+	Version         uint64        `json:"version"`
+	You             PlayerID      `json:"you,omitempty"`
+	Players         []PlayerView  `json:"players"`
+	Turn            PlayerID      `json:"turn,omitempty"`
+	Direction       int           `json:"direction"`
+	TopCard         *Card         `json:"top_card,omitempty"`
+	ActiveColor     Color         `json:"active_color,omitempty"`
+	DrawPileCount   int           `json:"draw_pile_count"`
+	DiscardCount    int           `json:"discard_count"`
+	PendingDraw     int           `json:"pending_draw"`
+	PendingDrawKind Kind          `json:"pending_draw_kind,omitempty"`
+	ChallengeTarget PlayerID      `json:"challenge_target,omitempty"`
+	DrawnCardID     int           `json:"drawn_card_id,omitempty"`
+	CanPass         bool          `json:"can_pass"`
+	Winner          PlayerID      `json:"winner,omitempty"`
+	FinishingPlayer PlayerID      `json:"finishing_player,omitempty"`
 }
 
 // View returns detached data. Neither opponents' hands nor challenge evidence
@@ -41,6 +44,9 @@ func (g *Game) View(viewer PlayerID) View {
 		if p.lastUNOAction == SayUNO {
 			pv.UNODeclared = p.lastUNO
 		}
+		if p.lastUNOAction == PenalizeUNO {
+			pv.UNOPenalized = p.lastUNO
+		}
 		if p.id == viewer {
 			pv.Hand = append([]Card(nil), p.hand...)
 		}
@@ -52,6 +58,9 @@ func (g *Game) View(viewer PlayerID) View {
 	}
 	if s.phase == Playing {
 		v.Turn = s.players[s.turn].id
+		if s.pending > 0 {
+			v.FinishingPlayer = s.finishingPlayer()
+		}
 	}
 	if len(s.discard) > 0 {
 		c := s.discard[len(s.discard)-1]

@@ -1,0 +1,8 @@
+# Optional: mount a complete host-side rule directory without rebuilding images.
+services:
+  api:
+    volumes:
+      - type: bind
+        source: ${UNOUR_RULES_DIR:?Set UNOUR_RULES_DIR to a complete rule directory}
+        target: /etc/unour/rules
+        read_only: true

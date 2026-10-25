@@ -1,0 +1,61 @@
+{
+  "name": "matching",
+  "version": 1,
+  "order": 10,
+  "title": "出牌匹配",
+  "group": "基本规则",
+  "required": true,
+  "default_enabled": true,
+  "description": "控制同色和同数字接牌，至少开启一项。",
+  "options": [
+    {
+      "key": "same_color",
+      "type": "boolean",
+      "label": "允许同色接牌",
+      "default": true,
+      "description": "可以接当前出牌颜色的牌。"
+    },
+    {
+      "key": "same_value",
+      "type": "boolean",
+      "label": "允许同数字接牌",
+      "default": true,
+      "description": "动作牌按同类型匹配，万能牌后按指定颜色接牌。"
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "at_least_one",
+      "fields": [
+        "same_color",
+        "same_value"
+      ],
+      "message": "同色与同数字至少启用一项。"
+    }
+  ],
+  "steps": [
+    {
+      "when": "action == \"play\" && pending_draw == 0 && !top.exists",
+      "reject": "没有可匹配的顶牌。"
+    },
+    {
+      "when": "action == \"play\" && pending_draw == 0",
+      "set": {
+        "allow": "card.wild || ((options.same_color || top.wild) && card.color == active_color) || (options.same_value && card.kind == top.kind && (card.kind != \"number\" || card.number == top.number))"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "可以按当前颜色接牌。",
+      "when": "options.same_color"
+    },
+    {
+      "text": "可以按相同数字或相同动作接牌。",
+      "when": "options.same_value"
+    },
+    {
+      "text": "万能牌后仍可按指定颜色接牌。"
+    }
+  ]
+}

@@ -18,10 +18,17 @@ type config struct {
 	trustedProxies []netip.Prefix
 	dbPath         string
 	adminConfig    string
+	rulesDir       string
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
-	cfg := config{addr: ":8088", maxRooms: 1000, dbPath: "data/unour.db"}
+	cfg := config{addr: ":8088", maxRooms: 1000, dbPath: "data/unour.db", rulesDir: "rules"}
+	if path := getenv("UNO_RULES_DIR"); path != "" {
+		if strings.TrimSpace(path) == "" {
+			return config{}, fmt.Errorf("UNO_RULES_DIR must be a rule directory path")
+		}
+		cfg.rulesDir = path
+	}
 	if path := getenv("UNO_ADMIN_CONFIG"); path != "" {
 		if strings.TrimSpace(path) == "" {
 			return config{}, fmt.Errorf("UNO_ADMIN_CONFIG must be a private configuration file path")

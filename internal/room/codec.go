@@ -15,7 +15,10 @@ import (
 	"unour/internal/bot"
 )
 
-const maxSnapshotBytes = 1 << 20
+const (
+	maxSnapshotBytes     = 1 << 20
+	recordSnapshotFormat = 2
+)
 
 // RecordCodec is shared by durable adapters. Implementations must support
 // concurrent calls; Decode returns an exclusively owned Record, and Encode must
@@ -26,15 +29,11 @@ type RecordCodec interface {
 }
 
 type codec struct {
-	rules   RuleBuilder
 	shuffle game.ShuffleFunc
 }
 
-func NewCodec(rules RuleBuilder, shuffle game.ShuffleFunc) RecordCodec {
-	if rules == nil {
-		rules = game.NewRegistry()
-	}
-	return &codec{rules: rules, shuffle: shuffle}
+func NewCodec(shuffle game.ShuffleFunc) RecordCodec {
+	return &codec{shuffle: shuffle}
 }
 
 type recordSnapshot struct {
@@ -62,7 +61,7 @@ func (c *codec) Encode(r *Record) ([]byte, error) {
 	if r == nil || r.Game == nil {
 		return nil, fmt.Errorf("cannot persist a room without a game")
 	}
-	s := recordSnapshot{FormatVersion: 1, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Accounts: r.Accounts, Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
+	s := recordSnapshot{FormatVersion: recordSnapshotFormat, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Accounts: r.Accounts, Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
 	s.RosterVersion = r.RosterVersion
 	s.JoinLocked = r.JoinLocked
 	s.Departed = r.Departed
@@ -76,7 +75,7 @@ func (c *codec) Encode(r *Record) ([]byte, error) {
 	}
 	// Refuse records that this adapter could not restore after acknowledging a
 	// commit, including a mismatched registry or changed rule specification.
-	rules, err := c.rules.Build(s.Rules)
+	rules, err := c.restoreRules(s.Game, s.Rules)
 	if err != nil {
 		return nil, fmt.Errorf("validate persisted rules: %w", err)
 	}
@@ -106,13 +105,13 @@ func (c *codec) Decode(data []byte) (*Record, error) {
 	if err := d.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("room checkpoint has trailing data")
 	}
-	if s.FormatVersion != 1 {
+	if s.FormatVersion != recordSnapshotFormat {
 		return nil, fmt.Errorf("unsupported room checkpoint format %d", s.FormatVersion)
 	}
 	if err := validateRecord(s); err != nil {
 		return nil, err
 	}
-	rules, err := c.rules.Build(s.Rules)
+	rules, err := c.restoreRules(s.Game, s.Rules)
 	if err != nil {
 		return nil, fmt.Errorf("restore room rules: %w", err)
 	}
@@ -285,4 +284,9 @@ func validateBots(s recordSnapshot, players map[game.PlayerID]bool) error {
 		}
 	}
 	return nil
+}
+
+// Room programs are reconstructed exclusively from their own definitions.
+func (c *codec) restoreRules(cp game.Checkpoint, specs []game.RuleSpec) (game.RuleSet, error) {
+	return game.BuildFrozenRules(cp.RuleModules, specs)
 }

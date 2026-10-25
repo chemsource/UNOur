@@ -113,6 +113,8 @@ func (h *handler) failure(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.As(err, &domain) {
 		status := 409
 		switch domain.Code {
+		case game.RuleCatalogChanged:
+			status = 409
 		case game.InvalidInput, game.CardNotOwned:
 			status = 400
 		case game.RuleViolation, game.CardNotPlayable:

@@ -11,9 +11,10 @@ import (
 )
 
 type SoloRequest struct {
-	BotCount   int             `json:"bot_count"`
-	Difficulty bot.Difficulty  `json:"difficulty"`
-	Rules      []game.RuleSpec `json:"rules,omitempty"`
+	CatalogRevision string          `json:"catalog_revision,omitempty"`
+	BotCount        int             `json:"bot_count"`
+	Difficulty      bot.Difficulty  `json:"difficulty"`
+	Rules           []game.RuleSpec `json:"rules,omitempty"`
 }
 
 // BotUNO persists the intended reaction. A missed declaration becomes a real
@@ -47,7 +48,7 @@ func (s *Service) CreateSolo(ctx context.Context, accountID, name string, req So
 	if req.BotCount < 1 || req.BotCount >= maxPlayers || !req.Difficulty.Valid() {
 		return JoinResult{}, &game.Error{Code: game.InvalidInput, Message: "choose 1–9 computers within room capacity and a valid difficulty"}
 	}
-	g, specs, err := s.buildGame(req.Rules)
+	g, specs, err := s.buildGame(req.Rules, req.CatalogRevision)
 	if err != nil {
 		return JoinResult{}, err
 	}
@@ -178,7 +179,7 @@ func nextBotTask(r *Record, now time.Time) *BotTask {
 		task = &BotTask{PlayerID: p.ID, Version: v.Version, DueAt: uno.At, Profile: r.Bots[p.ID], Type: action, WindowID: uno.WindowID}
 	}
 	if task != nil && task.Type == "" {
-		task.Observation = bot.Observation{View: r.Game.View(task.PlayerID), Memory: r.BotMemory.Clone(), Rules: copySpecs(r.Rules)}
+		task.Observation = bot.Observation{View: r.Game.View(task.PlayerID), Memory: r.BotMemory.Clone(), Rules: copySpecs(r.Rules), RuleModules: r.Game.RuleModules()}
 	}
 	return task
 }

@@ -39,3 +39,27 @@ func TestInvalidConfigurationIsRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestRuleDirectoryConfiguration(t *testing.T) {
+	cfg, err := loadConfig(func(string) string { return "" })
+	if err != nil || cfg.rulesDir != "rules" {
+		t.Fatal("missing source rule directory default", cfg, err)
+	}
+	cfg, err = loadConfig(func(key string) string {
+		if key == "UNO_RULES_DIR" {
+			return "/config/rules"
+		}
+		return ""
+	})
+	if err != nil || cfg.rulesDir != "/config/rules" {
+		t.Fatal("rule directory override ignored", cfg, err)
+	}
+	if _, err := loadConfig(func(key string) string {
+		if key == "UNO_RULES_DIR" {
+			return "  "
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("empty directory accepted")
+	}
+}

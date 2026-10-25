@@ -17,6 +17,7 @@ import (
 )
 
 type Rooms interface {
+	RulesCatalog() game.RuleCatalog
 	Create(context.Context, room.CreateRequest) (room.View, error)
 	CreateSolo(context.Context, string, string, room.SoloRequest) (room.JoinResult, error)
 	JoinAccount(context.Context, string, string, string) (room.JoinResult, error)
@@ -80,6 +81,7 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 	if h.admin != nil {
 		h.registerAdmin(mux)
 	}
+	mux.HandleFunc("/api/v1/rules", h.only("GET", func(w http.ResponseWriter, r *http.Request) { h.json(w, 200, h.rooms.RulesCatalog()) }))
 	mux.HandleFunc("/healthz", h.only("GET", func(w http.ResponseWriter, r *http.Request) { h.json(w, 200, map[string]string{"status": "ok"}) }))
 	mux.HandleFunc("/api/v1/auth/register", h.only("POST", h.credentialsEndpoint(true)))
 	mux.HandleFunc("/api/v1/auth/login", h.only("POST", h.credentialsEndpoint(false)))

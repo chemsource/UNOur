@@ -1,0 +1,72 @@
+{
+  "name": "stacking",
+  "version": 1,
+  "order": 50,
+  "title": "罚牌叠加",
+  "group": "可选规则",
+  "default_enabled": false,
+  "description": "可以用同类罚牌继续接牌，调整混合、异色和转向策略。",
+  "options": [
+    {
+      "key": "mixed",
+      "type": "boolean",
+      "label": "允许 +2 / +4 混合叠加",
+      "default": false
+    },
+    {
+      "key": "different_colors",
+      "type": "boolean",
+      "label": "允许异色 +2 叠加",
+      "default": false
+    },
+    {
+      "key": "reverse",
+      "type": "boolean",
+      "label": "允许连续转向",
+      "default": false,
+      "description": "用反转牌将罚牌转给上家，并可继续接反转。"
+    }
+  ],
+  "steps": [
+    {
+      "when": "action == \"play\" && pending_draw > 0 && card.kind == \"draw_two\"",
+      "set": {
+        "allow": "(pending_kind == \"draw_two\" || (options.mixed && pending_kind == \"wild_draw_four\")) && (options.different_colors || card.color == active_color)"
+      }
+    },
+    {
+      "when": "action == \"play\" && pending_draw > 0 && card.kind == \"wild_draw_four\"",
+      "set": {
+        "allow": "pending_kind == \"wild_draw_four\" || options.mixed"
+      }
+    },
+    {
+      "when": "action == \"play\" && pending_draw > 0 && card.kind == \"reverse\"",
+      "set": {
+        "allow": "options.reverse && (card.color == active_color || top.kind == \"reverse\")"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "+2 与 +4 可以混合叠加。",
+      "when": "options.mixed"
+    },
+    {
+      "text": "只能叠加同类罚牌。",
+      "when": "!options.mixed"
+    },
+    {
+      "text": "+2 可异色叠加。",
+      "when": "options.different_colors"
+    },
+    {
+      "text": "+2 接牌需要符合当前颜色。",
+      "when": "!options.different_colors"
+    },
+    {
+      "text": "反转牌可连续转移罚牌。",
+      "when": "options.reverse"
+    }
+  ]
+}

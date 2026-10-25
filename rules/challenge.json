@@ -1,0 +1,43 @@
+{
+  "name": "challenge",
+  "version": 1,
+  "order": 40,
+  "title": "+4 质疑",
+  "group": "可选规则",
+  "default_enabled": true,
+  "description": "允许质疑持有当前颜色时打出的 +4；关闭时持有当前颜色的普通牌不能打 +4。",
+  "options": [
+    {
+      "key": "failure_multiplier",
+      "type": "select",
+      "label": "质疑失败罚牌倍率",
+      "default": 150,
+      "choices": [
+        {
+          "value": 150,
+          "label": "1.5 倍"
+        },
+        {
+          "value": 200,
+          "label": "2 倍"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "set": {
+        "allow_challenge": "true",
+        "challenge_multiplier": "options.failure_multiplier"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "质疑成功时，最近 +4 出牌者承担当前罚牌池，质疑者保留回合。"
+    },
+    {
+      "text": "质疑失败承担罚牌池的 {{failure_multiplier}}，并结束回合。"
+    }
+  ]
+}

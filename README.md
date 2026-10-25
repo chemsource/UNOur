@@ -23,6 +23,7 @@ go run -buildvcs=false ./cmd/server
 | 环境变量 | 默认值 | 含义 |
 | --- | --- | --- |
 | `UNO_ADDR` | `:8088` | HTTP 监听地址 |
+| `UNO_RULES_DIR` | `rules`（镜像内为 `/etc/unour/rules`） | JSON 规则目录；SIGHUP 全量校验后原子重载 |
 | `UNO_DB_PATH` | `data/unour.db` | SQLite 文件路径，相对路径基于工作目录 |
 | `UNO_MAX_ROOMS` | `1000` | 数据库房间数量上限；已有房间不会因降低上限而被删除 |
 | `UNO_ROOM_TTL` | `0` | 默认关闭自动删除；正值表示距最后成功写操作的保留时间，读取不续期 |
@@ -53,7 +54,7 @@ UNO_DB_PATH=/var/lib/unour/unour.db make run
 
 ## API
 
-除头像图片和删除房间的空 `204` 外，响应使用 JSON。注册、登录和健康检查不需要登录；所有房间操作需要账户 Cookie，读取/命令/删除还需要加入房间时返回的凭证：
+除头像图片和删除房间的空 `204` 外，响应使用 JSON。注册、登录、规则目录和健康检查不需要登录；所有房间操作需要账户 Cookie，读取/命令/删除还需要加入房间时返回的凭证：
 
 ```http
 Authorization: Bearer <房间 token>
@@ -138,6 +139,7 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
   "host_id": "后端生成的玩家 ID",
   "created_at": "2026-10-25T12:00:00Z",
   "profiles": {"玩家 ID":{"id":"账户 ID","username":"Alice","avatar_url":"","created_at":"2026-10-25T12:00:00Z"}},
+  "rule_descriptions": [{"name":"matching","title":"出牌匹配","text":["可以按当前颜色接牌。"]}],
   "rules": [{"name":"matching"},{"name":"actions"},{"name":"draw"},{"name":"challenge"}],
   "state": {
     "phase": "playing",
@@ -150,6 +152,7 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
     "draw_pile_count": 93,
     "discard_count": 1,
     "pending_draw": 0,
+    "legal_actions": [{"action":"draw"}],
     "can_pass": false
   }
 }
@@ -157,7 +160,7 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
 
 `players` 每项包含 `id/name/hand_count/eliminated`，只有本人包含 `hand`。卡牌是 `{id,color,kind,number?}`。数字 0 的 `number` 字段可省略，按 0 处理。颜色为 `red/blue/green/yellow/wild`，类型为 `number/skip/reverse/draw_two/wild/wild_draw_four`。有弃牌时返回 `top_card`，万能牌的物理颜色始终是 `wild`，实际匹配颜色看 `active_color`。
 
-状态阶段为 `lobby/playing/finished`。结束后 `winner` 返回胜者 ID；所有人淘汰时无胜者。成功胜利是正常响应，不以错误表示。最后一张是罚牌时，先等待罚牌或质疑结算。
+状态阶段为 `lobby/playing/finished`。结束后 `winner` 返回胜者 ID；所有人淘汰时无胜者。成功胜利是正常响应，不以错误表示。最后一张为 +2，或关闭质疑时的 +4，会在同一动作中让下家罚摸后判胜；开启质疑时的最后 +4 只允许下家摸罚牌或质疑，结算后判胜，不能叠加/反转回已经空手的玩家。等待期间返回 `finishing_player`。
 
 ### 房间生命周期
 
@@ -183,7 +186,7 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
 {"id":9,"deadline":"2026-10-25T12:00:02Z"}
 ```
 
-成功声明后，所有玩家读取状态都能看到该玩家的 `uno_declared` 窗口编号，例如 `9`。客户端比较新旧编号显示「玩家名：UNO!」并去重；即使轮询未看到短暂的 `uno` 窗口，也能识别声明。首次进入房间只建立基线，不重放历史提示。罚牌和取消窗口不会被标记为成功声明。
+成功声明后，所有玩家读取状态都能看到该玩家的 `uno_declared` 窗口编号，例如 `9`。客户端比较新旧编号显示「玩家名：UNO!」并去重；即使轮询未看到短暂的 `uno` 窗口，也能识别声明。首次进入房间只建立基线，不重放历史提示。罚牌和取消窗口不会被标记为成功声明。漏喊后的罚摸用 `uno_penalized` 窗口编号单独公开，供客户端区分 UNO 罚摸与正常摸牌；重复罚摸请求不重复加牌。UNO 罚摸独立于普通摸牌机会。
 
 真人的 UNO 仍由前端监听空格/中央点击并上报；后端检查窗口、身份和期限。电脑的 UNO 则由服务端统一调度：
 
@@ -219,19 +222,19 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
 | draw | play_drawn_card=true，play_any_after_draw=false | 普通摸一张后可出刚摸到的牌或 pass；play_any_after_draw=true 时可出原有手牌中符合规则的牌，仍禁止再次摸牌；play_drawn_card=false 则摸完结束回合，此时不能启用 play_any_after_draw |
 | challenge | failure_multiplier=150 | 允许 +4 质疑；150/200 分别为失败承担 1.5/2 倍罚牌池 |
 | stacking（可选） | mixed=false，different_colors=false，reverse=false | 同类叠加；mixed 允许 +2/+4 混合；different_colors 允许异色 +2；reverse 允许匹配的 Reverse 反转罚牌方向 |
-| hand_limit（可选） | limit=25 | 手牌达到上限淘汰；上限必须大于开局手牌数 |
+| hand_limit（可选） | limit=25 | 手牌达到上限淘汰；标准开局每人 7 张，可配置上限为 8–108 |
 
 质疑成功时，最近 +4 出牌者承担当前罚牌池，质疑者保留回合；失败时质疑者承担倍率罚牌并结束回合。证据取自 +4 出牌前的手牌与当时当前颜色，不能自选质疑目标。没有 challenge 规则时，持有当前颜色的玩家不能打 +4。
 
-网页创建房间和人机对战均可展开「自定义规则」配置上述选项。罚牌叠加的混合、异色 +2 与连续转向选项随叠加总开关生效；连续转向不增加罚牌池，可用匹配颜色的反转牌转移，之后也能接异色反转。关闭质疑时不包含 challenge 规则，质疑失败倍率选项不生效；开启质疑且未勾选 2 倍时使用 150（1.5 倍）。规则随房间持久化并沿用至下一局。
+网页创建房间和人机对战均可展开「自定义规则」配置上述选项。罚牌叠加的混合、异色 +2 与连续转向选项随叠加总开关生效；连续转向不增加罚牌池，可用匹配颜色的反转牌转移，之后也能接异色反转。关闭质疑时不包含 challenge 规则，质疑失败倍率选项不生效；开启质疑后可选择 150（1.5 倍）或 200（2 倍）。规则随房间持久化并沿用至下一局。
 
 标准 108 张牌。对局中牌堆耗尽后，自动保留最上方的弃牌，将其余已打出的牌洗成新牌堆，响应中的牌堆数量立即更新；批量罚牌也会跨牌堆继续摸取。万能牌指定的当前颜色、出牌方向与所有卡牌 ID 保持不变，洗牌失败时整个动作回滚。只有顶部一张弃牌、其余牌都在玩家手中时不会生成新牌：普通摸牌没有可用牌时结束回合，罚牌池不足时只摸现有数量并结算。UNO 专用罚摸要求实际存在一张，否则拒绝且可以稍后重试。
 
 ## 新增规则
 
-实现 `game.Rule` 的 `ID()` 与 `Evaluate(game.Context,*game.Effects)`，在组合根自己的 `game.Registry` 注册工厂，将它注入 `room.Config.Registry`。客户端创建房间时按名称使用该规则。
+将一个模块 JSON 放入 `UNO_RULES_DIR` 指定的规则目录，然后向服务进程发送 SIGHUP。前端通过 `GET /api/v1/rules` 动态生成设置和选项；规则说明及合法动作也由后端提供。既有匹配、动作、摸牌、质疑、叠加和手牌上限均位于 `rules/*.json`，不再用 Go 硬编码具体策略。
 
-[可运行的 no_zero 示例](examples/rules/no_zero.go) 与集成测试证明：添加一个规则 veto 不需要修改游戏命令、HTTP 路由或存储。支持范围和新增效果原语的方法见 [架构文档](docs/architecture.md)。
+[配置模块指南](docs/rules.md) 包含表达式、效果、选项依赖、重载和容器挂载说明；[no_zero.json](examples/rules/no_zero.json) 及真实房间服务测试展示仅加文件的扩展。新房间冻结完整规则定义，修改/删除配置不会影响已建房间、重启、Bot 或再来一局。本次不处理升级前的旧房间存档。
 
 ## 验证
 

@@ -26,7 +26,7 @@ func codecRecord(t *testing.T) *Record {
 }
 
 func TestRecordCodecRestoresSessionsAndRules(t *testing.T) {
-	c := NewCodec(game.NewRegistry(), nil)
+	c := NewCodec(nil)
 	r := codecRecord(t)
 	data, err := c.Encode(r)
 	if err != nil {
@@ -49,7 +49,7 @@ func TestRecordCodecRestoresSessionsAndRules(t *testing.T) {
 }
 
 func TestRecordCodecRejectsBadMetadata(t *testing.T) {
-	c := NewCodec(game.NewRegistry(), nil)
+	c := NewCodec(nil)
 	for _, change := range []func(*Record){
 		func(r *Record) { r.HostID = "other" },
 		func(r *Record) { r.Sessions = nil },
@@ -80,7 +80,7 @@ func TestRecordCodecRejectsBadMetadata(t *testing.T) {
 	if _, err := c.Decode(append(data, []byte(` {}`)...)); err == nil {
 		t.Fatal("trailing data accepted")
 	}
-	raw["format_version"] = 1
+	raw["format_version"] = recordSnapshotFormat
 	raw["rules"] = []any{map[string]any{"name": "uninstalled"}}
 	bad, _ = json.Marshal(raw)
 	if _, err := c.Decode(bad); err == nil {
@@ -107,7 +107,7 @@ func codecSoloRecord(t *testing.T) *Record {
 }
 
 func TestCodecRejectsComputerSecretsAndInvalidSchedules(t *testing.T) {
-	c := NewCodec(nil, nil)
+	c := NewCodec(nil)
 	for _, change := range []func(*Record){
 		func(r *Record) { r.Bots["a"] = bot.Profile{Difficulty: bot.Normal, Style: bot.Balanced} },
 		func(r *Record) { r.Bots["b"] = bot.Profile{Difficulty: "cheat", Style: bot.Balanced} },

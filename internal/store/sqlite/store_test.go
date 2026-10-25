@@ -18,7 +18,7 @@ import (
 
 func openTest(t *testing.T, path string, now func() time.Time, max int) *Store {
 	t.Helper()
-	s, err := Open(Config{Path: path, MaxRooms: max, Now: now, Codec: room.NewCodec(game.NewRegistry(), testShuffle)})
+	s, err := Open(Config{Path: path, MaxRooms: max, Now: now, Codec: room.NewCodec(testShuffle)})
 	if err != nil {
 		t.Fatal(err)
 	}

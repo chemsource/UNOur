@@ -5,6 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY game ./game
+COPY rules ./rules
 COPY internal ./internal
 RUN CGO_ENABLED=1 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/uno-server ./cmd/server
 RUN CGO_ENABLED=1 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/unour-admin-config ./cmd/admin-config
@@ -17,9 +18,10 @@ RUN apk add --no-cache ca-certificates sqlite \
     && chown unour:unour /data
 COPY --from=build /out/uno-server /usr/local/bin/uno-server
 COPY --from=build /out/unour-admin-config /usr/local/bin/unour-admin-config
+COPY --from=build /src/rules /etc/unour/rules
 USER unour:unour
 WORKDIR /data
-ENV UNO_ADDR=:8088 UNO_DB_PATH=/data/unour.db
+ENV UNO_ADDR=:8088 UNO_DB_PATH=/data/unour.db UNO_RULES_DIR=/etc/unour/rules
 EXPOSE 8088
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8088/healthz

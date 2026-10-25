@@ -234,13 +234,14 @@ func (g *Game) apply(cmd Command, owned bool) (Result, error) {
 		return Result{Version: g.s.version, Events: []Event{}}, nil
 	}
 	idx := prepared.idx
+	effects := prepared.effects
 	var n state
-	if owned && cmd.Type == Play && prepared.effects.DrawNext == 0 && len(g.s.draw) > 0 {
+	if owned && cmd.Type == Play && effects.DrawNext == 0 && len(g.s.draw) > 0 &&
+		(len(g.s.players[idx].hand) > 1 || g.s.pending+effects.AddPenalty == 0) {
 		n = g.s.forkOwnedPlay()
 	} else {
 		n = g.s.fork()
 	}
-	effects := prepared.effects
 	events := make([]Event, 0, 4)
 	var errApply error
 	switch cmd.Type {
@@ -262,6 +263,15 @@ func (g *Game) apply(cmd Command, owned bool) (Result, error) {
 		return Result{}, errApply
 	}
 	n.enforceLimit(effects.HandLimit, &events)
+	// A last penalty card closes the round. Only a real +4 challenge can defer
+	// settlement; otherwise charge the recipient now, before declaring a winner.
+	// No stack/reverse may route the pool back to an already empty hand.
+	if n.phase == Playing && n.pending > 0 && n.challenge == nil && n.finishingPlayer() != "" {
+		if err := g.drawTurn(&n, n.turn, effects, &events); err != nil {
+			return Result{}, err
+		}
+		n.enforceLimit(effects.HandLimit, &events)
+	}
 	n.settle(&events)
 	// Refill before returning a live state, including after the last card was
 	// drawn or an empty deck gained a recyclable discard through a play.
@@ -354,6 +364,15 @@ func (s *state) enforceLimit(limit int, events *[]Event) {
 	if s.players[s.turn].eliminated {
 		s.advance(1)
 	}
+}
+
+func (s *state) finishingPlayer() PlayerID {
+	for _, p := range s.players {
+		if !p.eliminated && len(p.hand) == 0 {
+			return p.id
+		}
+	}
+	return ""
 }
 
 func (s *state) settle(events *[]Event) {

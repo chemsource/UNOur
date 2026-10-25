@@ -67,7 +67,7 @@ func TestSpectatorsQueueConsensusAndPersistence(t *testing.T) {
 		t.Fatal("started without consensus")
 	}
 	// Both the queue and approvals survive a complete codec round trip.
-	codec := room.NewCodec(nil, nil)
+	codec := room.NewCodec(nil)
 	if err := store.Transact(ctx, "lifecycle", func(r *room.Record) error {
 		data, e := codec.Encode(r)
 		if e != nil {
@@ -124,7 +124,7 @@ func TestLeaveTransfersHostAndOldSeatCannotBlockRematch(t *testing.T) {
 	if v.HostID != b.PlayerID || v.State.Phase != game.Finished || len(v.Departed) != 1 {
 		t.Fatalf("host or finish: %+v", v)
 	}
-	if err := store.Read(ctx, "leaving", func(r *room.Record) error { _, e := room.NewCodec(nil, nil).Encode(r); return e }); err != nil {
+	if err := store.Read(ctx, "leaving", func(r *room.Record) error { _, e := room.NewCodec(nil).Encode(r); return e }); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = s.VoteRematch(ctx, "leaving", b.Token, room.RematchRequest{Round: 1, Agree: true, RosterVersion: 4})
@@ -205,7 +205,7 @@ func TestRosterChangeInvalidatesConsentAndRejectsLateVote(t *testing.T) {
 	if next.State.Phase != game.Playing || next.Round != 2 || next.HostID != c.PlayerID || len(next.Bots) != 1 {
 		t.Fatalf("computer consent/reset failed: %+v", next)
 	}
-	if err = store.Read(ctx, j.Room.ID, func(r *room.Record) error { _, e := room.NewCodec(nil, nil).Encode(r); return e }); err != nil {
+	if err = store.Read(ctx, j.Room.ID, func(r *room.Record) error { _, e := room.NewCodec(nil).Encode(r); return e }); err != nil {
 		t.Fatal(err)
 	}
 

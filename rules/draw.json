@@ -1,0 +1,53 @@
+{
+  "name": "draw",
+  "version": 1,
+  "order": 30,
+  "title": "摸牌与跳过",
+  "group": "基本规则",
+  "required": true,
+  "default_enabled": true,
+  "description": "设置摸牌之后能否继续出牌。",
+  "options": [
+    {
+      "key": "play_drawn_card",
+      "type": "boolean",
+      "label": "摸牌后允许继续出牌",
+      "default": true
+    },
+    {
+      "key": "play_any_after_draw",
+      "type": "boolean",
+      "label": "摸牌后允许出任意手牌",
+      "default": false,
+      "description": "仍需符合本局出牌规则。",
+      "depends_on": [
+        {
+          "key": "play_drawn_card",
+          "equals": true
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "set": {
+        "play_drawn_card": "options.play_drawn_card",
+        "play_any_after_draw": "options.play_any_after_draw"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "text": "摸牌后直接结束回合。",
+      "when": "!options.play_drawn_card"
+    },
+    {
+      "text": "摸牌后可出刚摸到的牌，或选择跳过。",
+      "when": "options.play_drawn_card && !options.play_any_after_draw"
+    },
+    {
+      "text": "摸牌后可出任意符合规则的手牌，或选择跳过。",
+      "when": "options.play_any_after_draw"
+    }
+  ]
+}

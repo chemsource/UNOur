@@ -13,12 +13,13 @@ import (
 	"unour/internal/bot"
 )
 
-type RuleBuilder interface {
-	Build([]game.RuleSpec) (game.RuleSet, error)
+type RuleRegistry interface {
+	Resolve([]game.RuleSpec, string) (game.RuleSet, []game.RuleSpec, error)
+	Catalog() game.RuleCatalog
 }
 
 type Config struct {
-	Registry    RuleBuilder
+	Registry    RuleRegistry
 	Now         func() time.Time
 	TTL         time.Duration
 	GameOptions game.Options
@@ -28,7 +29,7 @@ type Config struct {
 
 type Service struct {
 	store    Store
-	registry RuleBuilder
+	registry RuleRegistry
 	now      func() time.Time
 	ttl      time.Duration
 	options  game.Options
@@ -58,8 +59,9 @@ func New(store Store, cfg Config) (*Service, error) {
 }
 
 type CreateRequest struct {
-	ID    string          `json:"id,omitempty"`
-	Rules []game.RuleSpec `json:"rules,omitempty"`
+	CatalogRevision string          `json:"catalog_revision,omitempty"`
+	ID              string          `json:"id,omitempty"`
+	Rules           []game.RuleSpec `json:"rules,omitempty"`
 }
 
 type View struct {
@@ -72,13 +74,14 @@ type View struct {
 	Round         uint64          `json:"round"`
 	Revision      uint64          `json:"revision"`
 	// Accounts is detached metadata for the HTTP profile adapter, never JSON.
-	Accounts  map[game.PlayerID]string      `json:"-"`
-	ID        string                        `json:"id"`
-	HostID    game.PlayerID                 `json:"host_id,omitempty"`
-	CreatedAt time.Time                     `json:"created_at"`
-	Rules     []game.RuleSpec               `json:"rules"`
-	State     game.View                     `json:"state"`
-	Bots      map[game.PlayerID]bot.Profile `json:"bots,omitempty"`
+	Accounts         map[game.PlayerID]string      `json:"-"`
+	ID               string                        `json:"id"`
+	HostID           game.PlayerID                 `json:"host_id,omitempty"`
+	CreatedAt        time.Time                     `json:"created_at"`
+	RuleDescriptions []game.RuleDescription        `json:"rule_descriptions"`
+	Rules            []game.RuleSpec               `json:"rules"`
+	State            game.View                     `json:"state"`
+	Bots             map[game.PlayerID]bot.Profile `json:"bots,omitempty"`
 }
 
 type JoinResult struct {
@@ -111,7 +114,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (View, error) {
 	if !validID(req.ID) {
 		return View{}, ErrInvalid
 	}
-	g, specs, err := s.buildGame(req.Rules)
+	g, specs, err := s.buildGame(req.Rules, req.CatalogRevision)
 	if err != nil {
 		return View{}, err
 	}
@@ -123,12 +126,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (View, error) {
 	return view, nil
 }
 
-func (s *Service) buildGame(specs []game.RuleSpec) (*game.Game, []game.RuleSpec, error) {
-	if specs == nil {
-		specs = game.DefaultRuleSpecs()
-	}
-	specs = copySpecs(specs)
-	rules, err := s.registry.Build(specs)
+func (s *Service) buildGame(specs []game.RuleSpec, revision string) (*game.Game, []game.RuleSpec, error) {
+	rules, specs, err := s.registry.Resolve(specs, revision)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -184,7 +183,7 @@ func (s *Service) join(ctx context.Context, roomID, name, accountID string, spec
 			}
 			if spectate || r.Game.View("").Phase != game.Lobby {
 				// Validate identity/name using the same boundary as seated players.
-				probe, _, e := s.buildGame(r.Rules)
+				probe, e := game.New(game.Options{})
 				if e != nil {
 					return e
 				}
@@ -332,6 +331,7 @@ func roomView(id string, r *Record, viewer game.PlayerID) View {
 		bots[id] = profile
 	}
 	state := r.Game.View(viewer)
+	state.LegalActions = r.Game.LegalActions(viewer)
 	// Canonical display names also apply to already persisted computer rooms.
 	botNumber := 0
 	for i := range state.Players {
@@ -364,7 +364,7 @@ func roomView(id string, r *Record, viewer game.PlayerID) View {
 			departed = append(departed, p.ID)
 		}
 	}
-	return View{JoinLocked: r.JoinLocked, RosterVersion: r.RosterVersion, Departed: departed, Role: role, Spectators: observers, RematchVotes: votes, Round: roundNumber(r), Revision: r.Revision + state.Version, ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), State: state, Accounts: accounts, Bots: bots}
+	return View{JoinLocked: r.JoinLocked, RosterVersion: r.RosterVersion, Departed: departed, Role: role, Spectators: observers, RematchVotes: votes, Round: roundNumber(r), Revision: r.Revision + state.Version, ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), RuleDescriptions: r.Game.RuleDescriptions(), State: state, Accounts: accounts, Bots: bots}
 }
 
 type accountKey struct{}
@@ -378,7 +378,7 @@ func WithAccount(ctx context.Context, accountID string) context.Context {
 func copySpecs(specs []game.RuleSpec) []game.RuleSpec {
 	out := make([]game.RuleSpec, len(specs))
 	for i, spec := range specs {
-		out[i] = game.RuleSpec{Name: spec.Name, Options: append(json.RawMessage(nil), spec.Options...)}
+		out[i] = game.RuleSpec{Name: spec.Name, Version: spec.Version, Options: append(json.RawMessage(nil), spec.Options...)}
 	}
 	return out
 }
@@ -403,3 +403,5 @@ func validID(id string) bool {
 	}
 	return true
 }
+
+func (s *Service) RulesCatalog() game.RuleCatalog { return s.registry.Catalog() }

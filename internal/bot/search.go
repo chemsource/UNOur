@@ -77,7 +77,13 @@ func (b *Brain) Decide(ctx context.Context, obs Observation, profile Profile, cf
 	if len(specs) == 0 {
 		specs = game.DefaultRuleSpecs()
 	}
-	rules, err := b.registry.Build(specs)
+	var rules game.RuleSet
+	var err error
+	if len(obs.RuleModules) > 0 {
+		rules, err = game.BuildFrozenRules(obs.RuleModules, specs)
+	} else {
+		rules, err = b.registry.Build(specs)
+	}
 	if err != nil {
 		return Decision{}, err
 	}
