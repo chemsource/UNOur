@@ -134,11 +134,11 @@ func (h *handler) failure(w http.ResponseWriter, r *http.Request, err error) {
 		switch app.Code {
 		case "room_not_found":
 			status = 404
-		case "room_exists", "version_conflict", "rematch_unavailable", "roster_changed":
+		case "room_exists", "version_conflict", "rematch_unavailable", "roster_changed", "member_not_found", "last_member":
 			status = 409
 		case "unauthorized":
 			status = 401
-		case "forbidden", "spectator_read_only", "spectator_required":
+		case "forbidden", "spectator_read_only", "spectator_required", "room_locked":
 			status = 403
 		case "capacity_exceeded":
 			status = 503

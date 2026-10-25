@@ -29,6 +29,7 @@ var (
 // Record is owned by Store. It must only be accessed inside a callback, and must
 // never be used as an HTTP response. Session keys are SHA-256 token digests.
 type Record struct {
+	JoinLocked    bool
 	RosterVersion uint64
 	Departed      map[game.PlayerID]bool
 	Game          *game.Game

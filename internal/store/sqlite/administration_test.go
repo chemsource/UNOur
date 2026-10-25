@@ -21,7 +21,7 @@ func TestAdministrativeEditIsAtomicAuditedAndDurable(t *testing.T) {
 	service := serviceTest(t, store, nil)
 	a, b := started(t, service)
 	manager := room.NewManager(service, store)
-	listed, err := manager.List(ctx, 10, 0)
+	listed, err := manager.List(ctx, room.RoomQuery{Limit: 10})
 	if err != nil || listed.Total != 1 || len(listed.Rooms) != 1 {
 		t.Fatalf("list: %+v %v", listed, err)
 	}
@@ -32,7 +32,7 @@ func TestAdministrativeEditIsAtomicAuditedAndDurable(t *testing.T) {
 	if len(before.State.Players[0].Hand) != 2 || len(before.State.Players[1].Hand) != 2 || len(before.Deck) != 103 {
 		t.Fatal("admin cannot inspect all cards")
 	}
-	req := room.EditRequest{CardEdit: game.CardEdit{Operation: "swap", CardID: before.State.Players[0].Hand[0].ID, ReplacementID: before.State.Players[1].Hand[0].ID}, ExpectedVersion: before.State.Version, ExpectedRevision: before.Revision}
+	req := room.EditRequest{CardEdit: game.CardEdit{Operation: "swap", CardID: before.State.Players[0].Hand[0].ID, ReplacementID: before.State.Players[1].Hand[0].ID}, Instance: before.Instance, ExpectedVersion: before.State.Version, ExpectedRevision: before.Revision}
 	after, err := manager.Edit(ctx, "table", req)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestAdminEditInvalidatesBotDecisionAndPrivateInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Edit(ctx, joined.Room.ID, room.EditRequest{CardEdit: game.CardEdit{Operation: "swap", CardID: before.State.Players[0].Hand[0].ID, ReplacementID: before.Deck[0].ID}, ExpectedVersion: before.State.Version, ExpectedRevision: before.Revision}); err != nil {
+	if _, err := manager.Edit(ctx, joined.Room.ID, room.EditRequest{CardEdit: game.CardEdit{Operation: "swap", CardID: before.State.Players[0].Hand[0].ID, ReplacementID: before.Deck[0].ID}, Instance: before.Instance, ExpectedVersion: before.State.Version, ExpectedRevision: before.Revision}); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.ApplyBot(ctx, joined.Room.ID, *task, game.Command{Type: game.Draw, PlayerID: task.PlayerID}); !errors.Is(err, room.ErrConflict) {

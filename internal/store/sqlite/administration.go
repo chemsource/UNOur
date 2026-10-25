@@ -14,32 +14,6 @@ import (
 
 var _ account.ManagementStore = (*Store)(nil)
 
-func (s *Store) RoomIDs(ctx context.Context, limit, offset int) ([]string, int, error) {
-	ids := []string{}
-	total := 0
-	tx, err := s.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, 0, err
-	}
-	defer tx.Rollback()
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rooms`).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM rooms ORDER BY touched_at DESC,id LIMIT ? OFFSET ?`, limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, 0, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, total, rows.Err()
-}
-
 func (s *Store) ListAccounts(ctx context.Context, query string, limit, offset int, now time.Time) (account.UserPage, error) {
 	page := account.UserPage{Users: []account.ManagedUser{}}
 	query = "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(query) + "%"

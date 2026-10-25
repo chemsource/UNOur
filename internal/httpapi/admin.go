@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"unour/game"
 	"unour/internal/account"
 	"unour/internal/admin"
 	"unour/internal/audit"
@@ -48,6 +49,9 @@ func (h *handler) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/admin/rooms", h.only("GET", h.adminOnly(h.adminRooms)))
 	mux.HandleFunc("/api/v1/admin/rooms/{room}", h.only("GET", h.adminOnly(h.adminRoom)))
 	mux.HandleFunc("/api/v1/admin/rooms/{room}/cards", h.only("POST", h.adminOnly(h.adminCards)))
+	mux.HandleFunc("/api/v1/admin/rooms/batch/delete", h.only("POST", h.adminOnly(h.adminDeleteRooms)))
+	mux.HandleFunc("/api/v1/admin/rooms/{room}/access", h.only("PUT", h.adminOnly(h.adminRoomAccess)))
+	mux.HandleFunc("/api/v1/admin/rooms/{room}/members/{player}/kick", h.only("POST", h.adminOnly(h.adminKickMember)))
 	mux.HandleFunc("/api/v1/admin/audit", h.only("GET", h.adminOnly(h.adminAudit)))
 }
 func (h *handler) adminSetCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
@@ -185,7 +189,8 @@ func (h *handler) adminRooms(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, err := h.admin.Rooms.List(r.Context(), limit, offset)
+	q := r.URL.Query()
+	page, err := h.admin.Rooms.List(r.Context(), room.RoomQuery{Limit: limit, Offset: offset, Query: q.Get("q"), Phase: game.Phase(q.Get("phase")), Kind: q.Get("kind"), Access: q.Get("access"), Sort: q.Get("sort")})
 	if err != nil {
 		h.failure(w, r, err)
 		return

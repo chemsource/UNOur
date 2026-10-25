@@ -38,6 +38,7 @@ func NewCodec(rules RuleBuilder, shuffle game.ShuffleFunc) RecordCodec {
 }
 
 type recordSnapshot struct {
+	JoinLocked    bool                          `json:"join_locked,omitempty"`
 	RosterVersion uint64                        `json:"roster_version,omitempty"`
 	Departed      map[game.PlayerID]bool        `json:"departed,omitempty"`
 	Spectators    []Spectator                   `json:"spectators,omitempty"`
@@ -63,6 +64,7 @@ func (c *codec) Encode(r *Record) ([]byte, error) {
 	}
 	s := recordSnapshot{FormatVersion: 1, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Accounts: r.Accounts, Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
 	s.RosterVersion = r.RosterVersion
+	s.JoinLocked = r.JoinLocked
 	s.Departed = r.Departed
 	s.Spectators, s.RematchVotes, s.Round, s.Revision = r.Spectators, r.RematchVotes, r.Round, r.Revision
 	s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO = r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO
@@ -120,6 +122,7 @@ func (c *codec) Decode(data []byte) (*Record, error) {
 	}
 	r := &Record{Game: g, HostID: s.HostID, Sessions: make(map[[32]byte]game.PlayerID, len(s.Sessions)), Accounts: s.Accounts, Rules: copySpecs(s.Rules), CreatedAt: s.CreatedAt}
 	r.RosterVersion = s.RosterVersion
+	r.JoinLocked = s.JoinLocked
 	r.Departed = s.Departed
 	r.Spectators, r.RematchVotes, r.Round, r.Revision = s.Spectators, s.RematchVotes, s.Round, s.Revision
 	r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO = s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO

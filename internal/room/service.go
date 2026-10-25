@@ -63,6 +63,7 @@ type CreateRequest struct {
 }
 
 type View struct {
+	JoinLocked    bool            `json:"join_locked"`
 	RosterVersion uint64          `json:"roster_version"`
 	Departed      []game.PlayerID `json:"departed"`
 	Role          string          `json:"role"`
@@ -178,6 +179,9 @@ func (s *Service) join(ctx context.Context, roomID, name, accountID string, spec
 		if accountID != "" && existing != "" {
 			playerID = existing
 		} else {
+			if r.JoinLocked {
+				return &Error{Code: "room_locked", Message: "this room is closed to new members"}
+			}
 			if spectate || r.Game.View("").Phase != game.Lobby {
 				// Validate identity/name using the same boundary as seated players.
 				probe, _, e := s.buildGame(r.Rules)
@@ -360,7 +364,7 @@ func roomView(id string, r *Record, viewer game.PlayerID) View {
 			departed = append(departed, p.ID)
 		}
 	}
-	return View{RosterVersion: r.RosterVersion, Departed: departed, Role: role, Spectators: observers, RematchVotes: votes, Round: roundNumber(r), Revision: r.Revision + state.Version, ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), State: state, Accounts: accounts, Bots: bots}
+	return View{JoinLocked: r.JoinLocked, RosterVersion: r.RosterVersion, Departed: departed, Role: role, Spectators: observers, RematchVotes: votes, Round: roundNumber(r), Revision: r.Revision + state.Version, ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), State: state, Accounts: accounts, Bots: bots}
 }
 
 type accountKey struct{}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -18,12 +19,13 @@ type storedRoom struct {
 	record     *room.Record
 	generation []byte
 	revision   int64
+	touched    int64
 }
 
 func (s *Store) load(ctx context.Context, id string) (storedRoom, error) {
 	var r storedRoom
 	var payload []byte
-	err := s.read.QueryRowContext(ctx, `SELECT payload,generation,revision FROM rooms WHERE id=?`, id).Scan(&payload, &r.generation, &r.revision)
+	err := s.read.QueryRowContext(ctx, `SELECT payload,generation,revision,touched_at FROM rooms WHERE id=?`, id).Scan(&payload, &r.generation, &r.revision, &r.touched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, room.ErrNotFound
 	}
@@ -98,51 +100,65 @@ func (s *Store) Read(ctx context.Context, id string, fn func(*room.Record) error
 }
 
 func (s *Store) Transact(ctx context.Context, id string, fn func(*room.Record) error) error {
-	return s.transact(ctx, id, fn, nil)
+	_, err := s.transact(ctx, id, "", func(r *room.Record, _ room.ManagementMetadata) error { return fn(r) }, nil)
+	return err
 }
 
-func (s *Store) TransactAudited(ctx context.Context, id string, fn func(*room.Record) error, entry audit.Entry) error {
-	return s.transact(ctx, id, fn, &entry)
+func (s *Store) TransactManaged(ctx context.Context, id, instance string, fn func(*room.Record, room.ManagementMetadata) error, entry audit.Entry) (room.ManagementMetadata, error) {
+	return s.transact(ctx, id, instance, fn, &entry)
 }
 
-func (s *Store) transact(ctx context.Context, id string, fn func(*room.Record) error, entry *audit.Entry) error {
+func (s *Store) transact(ctx context.Context, id, instance string, fn func(*room.Record, room.ManagementMetadata) error, entry *audit.Entry) (meta room.ManagementMetadata, err error) {
 	unlock, _, err := s.locks.acquire(ctx, id, false)
 	if err != nil {
-		return err
+		return meta, err
 	}
 	defer unlock()
 	r, err := s.load(ctx, id)
 	if err != nil {
-		return err
+		return meta, err
 	}
-	if err := fn(r.record); err != nil {
-		return err
+	if instance != "" && instance != hex.EncodeToString(r.generation) {
+		return meta, room.ErrConflict
+	}
+	meta = room.ManagementMetadata{Instance: hex.EncodeToString(r.generation), UpdatedAt: time.UnixMilli(r.touched).UTC()}
+	if err := fn(r.record, meta); err != nil {
+		return meta, err
 	}
 	payload, err := s.codec.Encode(r.record)
 	if err != nil {
-		return &game.Error{Code: game.InternalFailure, Message: "could not encode stored room", Cause: err}
+		return meta, &game.Error{Code: game.InternalFailure, Message: "could not encode stored room", Cause: err}
 	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return meta, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE rooms SET payload=?,revision=revision+1,touched_at=?,next_bot_at=? WHERE id=? AND generation=? AND revision=?`, payload, s.now().UnixMilli(), botDeadline(r.record), id, r.generation, r.revision)
+	meta.UpdatedAt = s.now().UTC().Truncate(time.Millisecond)
+	result, err := tx.ExecContext(ctx, `UPDATE rooms SET payload=?,revision=revision+1,touched_at=?,next_bot_at=? WHERE id=? AND generation=? AND revision=?`, payload, meta.UpdatedAt.UnixMilli(), botDeadline(r.record), id, r.generation, r.revision)
 	if err != nil {
-		return err
+		return meta, err
 	}
 	if err := affected(ctx, tx, id, result); err != nil {
-		return err
+		return meta, err
 	}
 	if entry != nil {
 		if err := insertAudit(ctx, tx, *entry); err != nil {
-			return err
+			return meta, err
 		}
 	}
-	return tx.Commit()
+	return meta, tx.Commit()
 }
 
 func (s *Store) Delete(ctx context.Context, id string, authorize func(*room.Record) error) error {
+	return s.delete(ctx, id, "", authorize, nil)
+}
+
+func (s *Store) DeleteManaged(ctx context.Context, id, instance string, authorize func(*room.Record) error, entry audit.Entry) error {
+	return s.delete(ctx, id, instance, authorize, &entry)
+}
+
+func (s *Store) delete(ctx context.Context, id, instance string, authorize func(*room.Record) error, entry *audit.Entry) error {
 	unlock, _, err := s.locks.acquire(ctx, id, false)
 	if err != nil {
 		return err
@@ -151,6 +167,9 @@ func (s *Store) Delete(ctx context.Context, id string, authorize func(*room.Reco
 	r, err := s.load(ctx, id)
 	if err != nil {
 		return err
+	}
+	if instance != "" && instance != hex.EncodeToString(r.generation) {
+		return room.ErrConflict
 	}
 	if err := authorize(r.record); err != nil {
 		return err
@@ -166,6 +185,11 @@ func (s *Store) Delete(ctx context.Context, id string, authorize func(*room.Reco
 	}
 	if err := affected(ctx, tx, id, result); err != nil {
 		return err
+	}
+	if entry != nil {
+		if err := insertAudit(ctx, tx, *entry); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

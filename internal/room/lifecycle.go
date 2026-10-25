@@ -204,55 +204,9 @@ func (s *Service) Leave(ctx context.Context, roomID, token string) error {
 		if err != nil {
 			return err
 		}
-		index := -1
-		for i, p := range r.Spectators {
-			if p.ID == id {
-				index = i
-			}
+		if err := s.removeMember(r, id); err != nil {
+			return err
 		}
-		before := r.Game.View("")
-		changesRoster := index < 0 || r.Spectators[index].NextRound
-		if index >= 0 {
-			r.Spectators = append(r.Spectators[:index], r.Spectators[index+1:]...)
-		} else {
-			if err := r.Game.Leave(id); err != nil {
-				return err
-			}
-			if before.Phase != game.Lobby {
-				if r.Departed == nil {
-					r.Departed = make(map[game.PlayerID]bool)
-				}
-				r.Departed[id] = true
-			}
-		}
-		for key, p := range r.Accounts {
-			if p == id {
-				delete(r.Accounts, key)
-			}
-		}
-		for key, p := range r.Sessions {
-			if p == id {
-				delete(r.Sessions, key)
-			}
-		}
-		if r.HostID == id {
-			r.HostID = ""
-			for _, p := range r.Game.View("").Players {
-				if _, computer := r.Bots[p.ID]; !computer && !r.Departed[p.ID] {
-					r.HostID = p.ID
-					break
-				}
-			}
-			if r.HostID == "" && len(r.Spectators) > 0 {
-				r.HostID = r.Spectators[0].ID
-			}
-		}
-		if changesRoster {
-			r.RematchVotes = nil
-			r.RosterVersion++
-		}
-		r.Revision++
-		s.observeBots(r, before, game.Command{Type: "leave", PlayerID: id, At: s.now().UTC()}, nil)
 		empty = len(r.Sessions) == 0
 		return nil
 	})
@@ -272,4 +226,59 @@ func (s *Service) Leave(ctx context.Context, roomID, token string) error {
 		}
 	}
 	return err
+}
+
+// removeMember is shared by voluntary departure and privileged removal.
+// The caller authenticates the member and persists the full lifecycle atomically.
+func (s *Service) removeMember(r *Record, id game.PlayerID) error {
+	index := -1
+	for i, p := range r.Spectators {
+		if p.ID == id {
+			index = i
+		}
+	}
+	before := r.Game.View("")
+	changesRoster := index < 0 || r.Spectators[index].NextRound
+	if index >= 0 {
+		r.Spectators = append(r.Spectators[:index], r.Spectators[index+1:]...)
+	} else {
+		if err := r.Game.Leave(id); err != nil {
+			return err
+		}
+		if before.Phase != game.Lobby {
+			if r.Departed == nil {
+				r.Departed = make(map[game.PlayerID]bool)
+			}
+			r.Departed[id] = true
+		}
+	}
+	for key, p := range r.Accounts {
+		if p == id {
+			delete(r.Accounts, key)
+		}
+	}
+	for key, p := range r.Sessions {
+		if p == id {
+			delete(r.Sessions, key)
+		}
+	}
+	if r.HostID == id {
+		r.HostID = ""
+		for _, p := range r.Game.View("").Players {
+			if _, computer := r.Bots[p.ID]; !computer && !r.Departed[p.ID] {
+				r.HostID = p.ID
+				break
+			}
+		}
+		if r.HostID == "" && len(r.Spectators) > 0 {
+			r.HostID = r.Spectators[0].ID
+		}
+	}
+	if changesRoster {
+		r.RematchVotes = nil
+		r.RosterVersion++
+	}
+	r.Revision++
+	s.observeBots(r, before, game.Command{Type: "leave", PlayerID: id, At: s.now().UTC()}, nil)
+	return nil
 }

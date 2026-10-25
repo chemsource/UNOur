@@ -63,7 +63,7 @@ func TestAdminSeesAllHandsAndEditsWithoutLeakingToPlayers(t *testing.T) {
 	if len(before.State.Players[0].Hand) != 2 || len(before.State.Players[1].Hand) != 2 {
 		t.Fatal("missing private hands")
 	}
-	body := fmt.Sprintf(`{"operation":"swap","card_id":%d,"replacement_id":%d,"expected_version":%d,"expected_revision":%d}`, before.State.Players[0].Hand[0].ID, before.State.Players[1].Hand[0].ID, before.State.Version, before.Revision)
+	body := fmt.Sprintf(`{"operation":"swap","instance":%q,"card_id":%d,"replacement_id":%d,"expected_version":%d,"expected_revision":%d}`, before.Instance, before.State.Players[0].Hand[0].ID, before.State.Players[1].Hand[0].ID, before.State.Version, before.Revision)
 	decode[map[string]any](t, adminRequest(c, "POST", "/rooms/table/cards", cookie, "", body), 403)
 	after := decode[room.Inspection](t, adminRequest(c, "POST", "/rooms/table/cards", cookie, csrf, body), 200)
 	if after.State.Players[0].Hand[0].ID != 2 {
