@@ -91,7 +91,7 @@ X-Account-ID: <当前账户 ID>
 | POST | `/api/v1/rooms/{id}/start` | 可省略 | 房主开局，至少两人 |
 | POST | `/api/v1/rooms/{id}/play` | `{"card_id":17,"color":"red"}` | 出牌；color 仅用于万能牌 |
 | POST | `/api/v1/rooms/{id}/draw` | 可省略 | 无罚牌时摸一张；有罚牌时承受整个罚牌池 |
-| POST | `/api/v1/rooms/{id}/pass` | 可省略 | 摸牌后放弃打出刚摸到的牌，结束回合 |
+| POST | `/api/v1/rooms/{id}/pass` | 可省略 | 普通摸牌后放弃出牌，结束回合 |
 | POST | `/api/v1/rooms/{id}/challenge` | 可省略 | 质疑最近可质疑的 +4；目标由后端确定 |
 | POST | `/api/v1/rooms/{id}/uno` | `{"window_id":9}` | 在期限前确认喊 UNO |
 | POST | `/api/v1/rooms/{id}/uno-penalty` | `{"window_id":9}` | 两秒到期后，本人漏喊 UNO 罚摸一张 |
@@ -201,7 +201,7 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
   "rules": [
     {"name":"matching","options":{"same_color":true,"same_value":true}},
     {"name":"actions","options":{"skip_draw":true,"keep_color":true}},
-    {"name":"draw","options":{"play_drawn_card":true}},
+    {"name":"draw","options":{"play_drawn_card":true,"play_any_after_draw":true}},
     {"name":"challenge","options":{"failure_multiplier":200}},
     {"name":"stacking","options":{"mixed":true,"different_colors":true,"reverse":true}},
     {"name":"hand_limit","options":{"limit":25}}
@@ -211,14 +211,16 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
 
 | 规则 | 默认选项 | 行为 |
 | --- | --- | --- |
-| matching | same_color=true，same_value=true | 按当前颜色、数字或动作类型匹配；万能牌可选色 |
-| actions | skip_draw=false，keep_color=false | Skip、Reverse、+2、+4；skip_draw 使被跳过者额外摸一张；keep_color 允许万能牌传 color=`keep` |
-| draw | play_drawn_card=true | 普通摸一张后可出刚摸到的牌或 pass；设 false 则摸完直接结束回合 |
+| matching | same_color=true，same_value=true | 按当前颜色、数字或动作类型匹配；两项至少启用一项；万能牌之后始终可按其指定颜色接牌 |
+| actions | skip_draw=false，keep_color=false | Skip、Reverse、+2、+4；skip_draw 使被跳过者额外摸一张；keep_color 允许万能牌保留当前颜色（显式选择当前色或传 color=`keep`）；关闭时必须换色 |
+| draw | play_drawn_card=true，play_any_after_draw=false | 普通摸一张后可出刚摸到的牌或 pass；play_any_after_draw=true 时可出原有手牌中符合规则的牌，仍禁止再次摸牌；play_drawn_card=false 则摸完结束回合，此时不能启用 play_any_after_draw |
 | challenge | failure_multiplier=150 | 允许 +4 质疑；150/200 分别为失败承担 1.5/2 倍罚牌池 |
 | stacking（可选） | mixed=false，different_colors=false，reverse=false | 同类叠加；mixed 允许 +2/+4 混合；different_colors 允许异色 +2；reverse 允许匹配的 Reverse 反转罚牌方向 |
 | hand_limit（可选） | limit=25 | 手牌达到上限淘汰；上限必须大于开局手牌数 |
 
 质疑成功时，最近 +4 出牌者承担当前罚牌池，质疑者保留回合；失败时质疑者承担倍率罚牌并结束回合。证据取自 +4 出牌前的手牌与当时当前颜色，不能自选质疑目标。没有 challenge 规则时，持有当前颜色的玩家不能打 +4。
+
+网页创建房间和人机对战均可展开「自定义规则」配置上述选项。罚牌叠加的混合、异色 +2 与连续转向选项随叠加总开关生效；连续转向不增加罚牌池，可用匹配颜色的反转牌转移，之后也能接异色反转。关闭质疑时不包含 challenge 规则，质疑失败倍率选项不生效；开启质疑且未勾选 2 倍时使用 150（1.5 倍）。规则随房间持久化并沿用至下一局。
 
 标准 108 张牌；弃牌回收保留顶部，所有 ID 不变。普通摸牌没有可用牌时结束回合；罚牌池不足时只摸现有数量并结算。UNO 专用罚摸要求实际存在一张，否则拒绝且可以稍后重试。
 

@@ -79,21 +79,50 @@ func TestFinalPenaltyDoesNotShortCircuitSearch(t *testing.T) {
 	}
 }
 
-func TestWildActionsIncludeAllColors(t *testing.T) {
-	g, _ := fixture(t, [][]int{{101, 102, 1}, {26, 27}}, []int{4}, nil, nil)
+func TestWildActionsRespectKeepColorRule(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		specs := game.DefaultRuleSpecs()
+		options, err := json.Marshal(map[string]bool{"keep_color": keep})
+		if err != nil {
+			t.Fatal(err)
+		}
+		specs[1].Options = options
+		g, _ := fixture(t, [][]int{{101, 102, 1}, {26, 27}}, []int{4}, specs, nil)
+		actions, err := legalActions(context.Background(), g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		choices := map[int]map[game.Color]bool{101: {}, 102: {}}
+		for _, a := range actions {
+			if choices[a.cmd.CardID] != nil {
+				choices[a.cmd.CardID][a.cmd.Color] = true
+			}
+		}
+		for id, colors := range choices {
+			if colors[game.Red] != keep || !colors[game.Blue] || !colors[game.Green] || !colors[game.Yellow] {
+				t.Fatalf("keep=%v card=%d wild choices: %v", keep, id, colors)
+			}
+		}
+	}
+}
+
+func TestBotConsidersOriginalHandAfterDrawWhenEnabled(t *testing.T) {
+	specs := game.DefaultRuleSpecs()
+	specs[2].Options = json.RawMessage(`{"play_any_after_draw":true}`)
+	g, _ := fixture(t, [][]int{{1, 26}, {27, 28}}, []int{4}, specs, func(cp *game.Checkpoint) { cp.DrawnCardID = 26 })
 	actions, err := legalActions(context.Background(), g)
 	if err != nil {
 		t.Fatal(err)
 	}
-	choices := map[int]map[game.Color]bool{101: {}, 102: {}}
-	for _, a := range actions {
-		if choices[a.cmd.CardID] != nil {
-			choices[a.cmd.CardID][a.cmd.Color] = true
+	for _, action := range actions {
+		if action.cmd.Type == game.Play && action.cmd.CardID == 1 {
+			if _, err := g.Apply(action.cmd); err != nil {
+				t.Fatal(err)
+			}
+			return
 		}
 	}
-	if len(choices[101]) != 4 || len(choices[102]) != 4 {
-		t.Fatalf("wild choices missing: %v", choices)
-	}
+	t.Fatal("bot ignored a legal original hand card after drawing")
 }
 
 func TestSearchIsRepeatableDetachedAndConcurrent(t *testing.T) {

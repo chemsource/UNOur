@@ -51,9 +51,8 @@ func candidateCommands(v game.View, candidates []game.Command) []game.Command {
 	for _, p := range v.Players {
 		if p.ID == v.You {
 			for _, c := range p.Hand {
-				if v.DrawnCardID != 0 && c.ID != v.DrawnCardID {
-					continue
-				}
+				// The rule engine decides whether an original hand card may be
+				// played after a draw; custom policies can allow that response.
 				if c.IsWild() {
 					for _, color := range colors {
 						add(game.Play, c.ID, color)

@@ -313,9 +313,6 @@ func (g *Game) prepare(cmd Command) (preparedCommand, error) {
 		if prepared.cardIndex < 0 {
 			return prepared, fail(CardNotOwned, "card is not in your hand")
 		}
-		if g.s.drawnCard != 0 && g.s.drawnCard != cmd.CardID {
-			return prepared, fail(CardNotPlayable, "only the card just drawn can be played")
-		}
 	}
 	effects := Effects{TurnSteps: 1}
 	for _, rule := range g.rules.rules {

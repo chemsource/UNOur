@@ -97,6 +97,7 @@ type Effects struct {
 	AllowChallenge      bool
 	ChallengeMultiplier int // percentage; 150 means 1.5 times the pool
 	PlayDrawnCard       bool
+	PlayAnyAfterDraw    bool
 }
 
 func (e Effects) validate() error {
@@ -115,6 +116,12 @@ type MatchingRule struct {
 }
 
 func (MatchingRule) ID() string { return "matching" }
+func (r MatchingRule) Validate() error {
+	if !r.SameColor && !r.SameValue {
+		return fmt.Errorf("at least one of same_color and same_value must be enabled")
+	}
+	return nil
+}
 func (r MatchingRule) Evaluate(c Context, e *Effects) error {
 	if c.Action() != Play || c.PendingDraw() > 0 {
 		return nil
@@ -124,7 +131,9 @@ func (r MatchingRule) Evaluate(c Context, e *Effects) error {
 		return fail(InvalidState, "no discard card")
 	}
 	card := c.Card()
-	if card.IsWild() || (r.SameColor && card.Color == c.ActiveColor()) || (r.SameValue && card.Kind == top.Kind && (card.Kind != Number || card.Number == top.Number)) {
+	// A wild's chosen color remains binding even in number-only rooms, so a
+	// wild cannot strand every ordinary card until another wild is drawn.
+	if card.IsWild() || ((r.SameColor || top.IsWild()) && card.Color == c.ActiveColor()) || (r.SameValue && card.Kind == top.Kind && (card.Kind != Number || card.Number == top.Number)) {
 		e.Allow = true
 	}
 	return nil
@@ -189,12 +198,20 @@ func (r StackingRule) Evaluate(c Context, e *Effects) error {
 }
 
 type DrawRule struct {
-	PlayDrawnCard bool `json:"play_drawn_card"`
+	PlayDrawnCard    bool `json:"play_drawn_card"`
+	PlayAnyAfterDraw bool `json:"play_any_after_draw"`
 }
 
 func (DrawRule) ID() string { return "draw" }
+func (r DrawRule) Validate() error {
+	if r.PlayAnyAfterDraw && !r.PlayDrawnCard {
+		return fmt.Errorf("play_any_after_draw requires play_drawn_card")
+	}
+	return nil
+}
 func (r DrawRule) Evaluate(_ Context, e *Effects) error {
 	e.PlayDrawnCard = r.PlayDrawnCard
+	e.PlayAnyAfterDraw = r.PlayAnyAfterDraw
 	return nil
 }
 

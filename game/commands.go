@@ -33,6 +33,9 @@ func (g *Game) validateStart(e Effects) error {
 }
 
 func validatePlay(s *state, cmd Command, card Card, e Effects) (Color, error) {
+	if s.drawnCard != 0 && s.drawnCard != cmd.CardID && !e.PlayAnyAfterDraw {
+		return "", fail(CardNotPlayable, "only the card just drawn can be played")
+	}
 	if !e.Allow {
 		return "", fail(CardNotPlayable, "card does not match or cannot answer the penalty")
 	}
@@ -44,6 +47,9 @@ func validatePlay(s *state, cmd Command, card Card, e Effects) (Color, error) {
 			chosen = cmd.Color
 		} else {
 			return "", fail(InvalidInput, "wild card requires a valid chosen color")
+		}
+		if chosen == s.active && !e.KeepColor {
+			return "", fail(RuleViolation, "wild card must change the active color in this room")
 		}
 		if card.Kind == WildDrawFour && !e.AllowChallenge && (Context{s: s}).HasColor(cmd.PlayerID, s.active) {
 			return "", fail(CardNotPlayable, "+4 cannot be played while holding the current color without the challenge rule")
