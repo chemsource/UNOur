@@ -81,9 +81,13 @@ X-Account-ID: <当前账户 ID>
 | --- | --- | --- | --- |
 | POST | `/api/v1/rooms` | `{"id":"table"}` | 创建房间；省略 id 则随机生成 |
 | POST | `/api/v1/solo` | `{"bot_count":2,"difficulty":"normal"}` | 原子创建、入座并开始人机对战，返回加入结果 |
-| POST | `/api/v1/rooms/{id}/players` | `{}` | 加入/恢复自己的座位，返回玩家 ID、token、房间状态 |
+| POST | `/api/v1/rooms/{id}/players` | `{}` | 大厅入座；局中加入先观战并预约下局；同账户恢复身份 |
 | GET | `/api/v1/rooms/{id}` | 无 | 获取该会话的私有视图 |
-| DELETE | `/api/v1/rooms/{id}` | 无 | 房主删除房间 |
+| DELETE | `/api/v1/rooms/{id}` | 无 | 房主解散房间，其他成员随后读取返回 404 |
+| POST | `/api/v1/rooms/{id}/spectators` | `{}` | 仅观战，不占座位；已有成员恢复原身份 |
+| POST | `/api/v1/rooms/{id}/participation` | `{"next_round":true}` | 观战者预约/取消下局席位；大厅中报名立即入座 |
+| POST | `/api/v1/rooms/{id}/rematch` | `{"agree":true,"round":1,"roster_version":2}` | 同意/撤回再来一局；最后一票自动重新发牌 |
+| POST | `/api/v1/rooms/{id}/leave` | `{}` | 退出；局中按弃权处理，房主自动转交 |
 | POST | `/api/v1/rooms/{id}/start` | 可省略 | 房主开局，至少两人 |
 | POST | `/api/v1/rooms/{id}/play` | `{"card_id":17,"color":"red"}` | 出牌；color 仅用于万能牌 |
 | POST | `/api/v1/rooms/{id}/draw` | 可省略 | 无罚牌时摸一张；有罚牌时承受整个罚牌池 |
@@ -96,7 +100,7 @@ POST 的非空请求体需要 `Content-Type: application/json`。创建与加入
 
 ### 人机对战
 
-登录后调用 `/api/v1/solo`，选择 1–9 名电脑（总人数 2–10），难度为 `easy/normal/hard/expert`，分别对应简单、标准、困难、专家。可附带与普通房间相同的 `rules`。成功后已经发牌，返回 `{player_id,token,room}`；不要再调用 `start`。只有创建账户能通过原加入接口恢复人机房间，恢复时照常轮换房间 token。
+登录后调用 `/api/v1/solo`，选择 1–9 名电脑（总人数 2–10），难度为 `easy/normal/hard/expert`，分别对应简单、标准、困难、专家。可附带与普通房间相同的 `rules`。成功后已经发牌，返回 `{player_id,token,room}`；不要再调用 `start`。创建者通过加入接口恢复自己的座位，恢复时照常轮换房间 token。其他账户可受邀先观战并预约下一局，与电脑混合参赛。
 
 公开房间的 `bots` 字段按玩家 ID 给出 `{difficulty,style}`，电脑按座位顺序命名为 Bot1–Bot9。电脑没有账户或客户端房间 token，手牌同其他对手一样隐藏；HTTP 不返回行为记忆或搜索状态。电脑各自争取获胜，不共享手牌，也不会结盟针对真人。
 
@@ -151,6 +155,16 @@ curl -s -b alice.cookies http://localhost:8088/api/v1/rooms/table \
 `players` 每项包含 `id/name/hand_count/eliminated`，只有本人包含 `hand`。卡牌是 `{id,color,kind,number?}`。数字 0 的 `number` 字段可省略，按 0 处理。颜色为 `red/blue/green/yellow/wild`，类型为 `number/skip/reverse/draw_two/wild/wild_draw_four`。有弃牌时返回 `top_card`，万能牌的物理颜色始终是 `wild`，实际匹配颜色看 `active_color`。
 
 状态阶段为 `lobby/playing/finished`。结束后 `winner` 返回胜者 ID；所有人淘汰时无胜者。成功胜利是正常响应，不以错误表示。最后一张是罚牌时，先等待罚牌或质疑结算。
+
+### 房间生命周期
+
+房间视图增加 `role`（player/spectator）、`round`、`revision`、`roster_version`、`spectators`、`rematch_votes`、`departed`。观战名单项为 `{id,name,next_round}`；`rematch_votes` 只列出已同意的真人 ID，`departed` 标记当前局已离开的座位。观战者没有手牌且不能出牌、摸牌、喊 UNO 或操作回合。房间最多 10 个下一局座位（包含电脑）及 50 名观战者；入座预约也占下一局座位。
+
+结束后所有仍参赛的真人及预约下局者都必须同意，电脑自动同意；可以撤回同意。最后一票与新一局发牌在同一事务中提交，沿用规则、房间号和成员凭证。新一局清除旧手牌、UNO 与电脑推断记忆。参赛名单变化清除已同意记录，并推进 `roster_version`；客户端必须展示新名单后重新提交当前代号，迟到的旧同意返回 `409 roster_changed`。纯观战者加入或离开不改变参赛名单。
+
+主动退出当前局按弃权处理，手牌仍封存在聚合中维护牌数守恒，下一局移除该座位。退出会立即撤销房间凭证，房主优先转交给仍在场的真人玩家，其次观战者。所有真人离开后清理房间。关闭页面不会自动弃权，可重新登录恢复身份；需要让出席位时使用退出接口。
+
+房间名单、报名、同意、轮次及离开记录均保存在 SQLite。`state.version` 只反映牌局动作，重开时也保持单调递增；`revision` 同时覆盖观战和投票变化，轮询客户端使用它比较房间快照。
 
 ### 并发与重试
 

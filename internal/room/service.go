@@ -63,6 +63,13 @@ type CreateRequest struct {
 }
 
 type View struct {
+	RosterVersion uint64          `json:"roster_version"`
+	Departed      []game.PlayerID `json:"departed"`
+	Role          string          `json:"role"`
+	Spectators    []Spectator     `json:"spectators"`
+	RematchVotes  []game.PlayerID `json:"rematch_votes"`
+	Round         uint64          `json:"round"`
+	Revision      uint64          `json:"revision"`
 	// Accounts is detached metadata for the HTTP profile adapter, never JSON.
 	Accounts  map[game.PlayerID]string      `json:"-"`
 	ID        string                        `json:"id"`
@@ -134,19 +141,20 @@ func (s *Service) buildGame(specs []game.RuleSpec) (*game.Game, []game.RuleSpec,
 }
 
 func (s *Service) Join(ctx context.Context, roomID, name string) (JoinResult, error) {
-	return s.join(ctx, roomID, name, "")
+	return s.join(ctx, roomID, name, "", false)
 }
 
-// JoinAccount recovers the account's seat without adding another player.
+// JoinAccount joins a lobby seat or reserves a next-round seat while viewing.
+// An existing account recovers its identity without adding another member.
 // Re-entry rotates its room token; joining a different account cannot claim it.
 func (s *Service) JoinAccount(ctx context.Context, roomID, accountID, name string) (JoinResult, error) {
 	if !validID(accountID) {
 		return JoinResult{}, ErrUnauthorized
 	}
-	return s.join(ctx, roomID, name, accountID)
+	return s.join(ctx, roomID, name, accountID, false)
 }
 
-func (s *Service) join(ctx context.Context, roomID, name, accountID string) (JoinResult, error) {
+func (s *Service) join(ctx context.Context, roomID, name, accountID string, spectate bool) (JoinResult, error) {
 	if !validID(roomID) {
 		return JoinResult{}, ErrInvalid
 	}
@@ -162,9 +170,7 @@ func (s *Service) join(ctx context.Context, roomID, name, accountID string) (Joi
 	digest := sha256.Sum256([]byte(token))
 	var result JoinResult
 	err = s.store.Transact(ctx, roomID, func(r *Record) error {
-		if len(r.Bots) > 0 && (accountID == "" || r.Accounts[accountID] != r.HostID) {
-			return ErrForbidden
-		}
+
 		if _, collision := r.Sessions[digest]; collision {
 			return &game.Error{Code: game.InternalFailure, Message: "could not allocate a unique player session"}
 		}
@@ -172,9 +178,34 @@ func (s *Service) join(ctx context.Context, roomID, name, accountID string) (Joi
 		if accountID != "" && existing != "" {
 			playerID = existing
 		} else {
-			if err := r.Game.Join(playerID, name); err != nil {
-				return err
+			if spectate || r.Game.View("").Phase != game.Lobby {
+				// Validate identity/name using the same boundary as seated players.
+				probe, _, e := s.buildGame(r.Rules)
+				if e != nil {
+					return e
+				}
+				if e = probe.Join(playerID, name); e != nil {
+					return e
+				}
+				if len(r.Spectators) >= 50 {
+					return ErrCapacity
+				}
+				queued := !spectate
+				if queued && nextSeatCount(r) >= r.Game.Checkpoint().MaxPlayers {
+					return ErrCapacity
+				}
+				r.Spectators = append(r.Spectators, Spectator{ID: playerID, Name: probe.View("").Players[0].Name, NextRound: queued})
+				if queued {
+					r.RosterVersion++
+					r.RematchVotes = nil
+				}
+			} else {
+				if err := r.Game.Join(playerID, name); err != nil {
+					return err
+				}
+				r.RosterVersion++
 			}
+			r.Revision++
 		}
 		if accountID != "" {
 			if r.Accounts == nil {
@@ -190,6 +221,9 @@ func (s *Service) join(ctx context.Context, roomID, name, accountID string) (Joi
 		r.Sessions[digest] = playerID
 		if r.HostID == "" {
 			r.HostID = playerID
+		}
+		if syncLobbyHost(r) {
+			r.Revision++
 		}
 		result = JoinResult{PlayerID: playerID, Token: token, Room: roomView(roomID, r, playerID)}
 		return nil
@@ -222,6 +256,11 @@ func (s *Service) Execute(ctx context.Context, roomID, token string, req ActionR
 		id, err := authenticate(ctx, r, token)
 		if err != nil {
 			return err
+		}
+		for _, p := range r.Spectators {
+			if p.ID == id {
+				return &Error{Code: "spectator_read_only", Message: "spectators cannot play"}
+			}
 		}
 		if req.Type == game.Start && id != r.HostID {
 			return ErrForbidden
@@ -297,7 +336,31 @@ func roomView(id string, r *Record, viewer game.PlayerID) View {
 			state.Players[i].Name = botName(botNumber)
 		}
 	}
-	return View{ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), State: state, Accounts: accounts, Bots: bots}
+	role := "player"
+	for _, observer := range r.Spectators {
+		if observer.ID == viewer {
+			role = "spectator"
+		}
+	}
+	observers := append([]Spectator{}, r.Spectators...)
+	votes := make([]game.PlayerID, 0, len(r.RematchVotes))
+	for _, p := range state.Players {
+		if r.RematchVotes[p.ID] {
+			votes = append(votes, p.ID)
+		}
+	}
+	for _, p := range observers {
+		if r.RematchVotes[p.ID] {
+			votes = append(votes, p.ID)
+		}
+	}
+	departed := make([]game.PlayerID, 0, len(r.Departed))
+	for _, p := range state.Players {
+		if r.Departed[p.ID] {
+			departed = append(departed, p.ID)
+		}
+	}
+	return View{RosterVersion: r.RosterVersion, Departed: departed, Role: role, Spectators: observers, RematchVotes: votes, Round: roundNumber(r), Revision: r.Revision + state.Version, ID: id, HostID: r.HostID, CreatedAt: r.CreatedAt, Rules: copySpecs(r.Rules), State: state, Accounts: accounts, Bots: bots}
 }
 
 type accountKey struct{}

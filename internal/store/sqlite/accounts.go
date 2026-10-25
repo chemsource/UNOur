@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,26 +76,29 @@ func (s *Store) PublicProfiles(ctx context.Context, ids []string) (map[string]ac
 	if len(ids) == 0 {
 		return result, nil
 	}
-	if len(ids) > 10 {
-		return nil, fmt.Errorf("too many profile lookups")
-	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := s.read.QueryContext(ctx, `SELECT id,username,avatar_digest,created_at FROM accounts WHERE id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		p, err := scanProfile(rows)
+	// Bound each SQL statement independently of the room's seat/member limits.
+	for batch := range slices.Chunk(ids, 64) {
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := s.read.QueryContext(ctx, `SELECT id,username,avatar_digest,created_at FROM accounts WHERE id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
-		result[p.ID] = p
+		for rows.Next() {
+			p, err := scanProfile(rows)
+			if err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			result[p.ID] = p
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, err
+		}
 	}
-	return result, rows.Err()
+	return result, nil
 }
 func (s *Store) CreateAccountSession(ctx context.Context, r account.SessionRecord) error {
 	tx, err := s.write.BeginTx(ctx, nil)

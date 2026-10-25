@@ -143,7 +143,7 @@ func validateCheckpoint(s state, maxPlayers int) error {
 		return bad("penalty kind")
 	}
 	if s.phase == Lobby {
-		if s.version != uint64(len(s.players)) || s.direction != 1 || s.turn != 0 || s.active != "" || s.pending != 0 || s.drawnCard != 0 || s.winner != "" || len(s.draw) > 0 || len(s.discard) > 0 {
+		if s.version < uint64(len(s.players)) || s.direction != 1 || s.turn != 0 || s.active != "" || s.pending != 0 || s.drawnCard != 0 || s.winner != "" || len(s.draw) > 0 || len(s.discard) > 0 {
 			return bad("lobby contains running-game state")
 		}
 		for _, p := range s.players {

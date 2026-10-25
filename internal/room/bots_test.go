@@ -29,7 +29,7 @@ func soloService(t *testing.T, capacity int) (*room.Service, *memory.Store, *tim
 	return s, store, &now
 }
 
-func TestSoloCreatesPrivateStartedTableAndRecoversOnlyOwner(t *testing.T) {
+func TestSoloCreatesStartedTableAndRecoversOwner(t *testing.T) {
 	s, store, _ := soloService(t, 3)
 	ctx := context.Background()
 	joined, err := s.CreateSolo(ctx, "account-a", "Alice", room.SoloRequest{BotCount: 2, Difficulty: bot.Hard})
@@ -57,8 +57,8 @@ func TestSoloCreatesPrivateStartedTableAndRecoversOnlyOwner(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.JoinAccount(ctx, v.ID, "account-b", "Bob"); !errors.Is(err, room.ErrForbidden) {
-		t.Fatalf("foreign account joined solo table: %v", err)
+	if guest, err := s.JoinAccount(ctx, v.ID, "account-b", "Bob"); err != nil || guest.Room.Role != "spectator" {
+		t.Fatalf("invited guest did not spectate: %v", err)
 	}
 	again, err := s.JoinAccount(ctx, v.ID, "account-a", "Alice")
 	if err != nil || again.PlayerID != joined.PlayerID || len(again.Room.State.Players) != 3 || again.Token == joined.Token {

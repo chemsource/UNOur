@@ -23,6 +23,10 @@ type Rooms interface {
 	State(context.Context, string, string) (room.View, error)
 	Execute(context.Context, string, string, room.ActionRequest) (room.ActionResult, error)
 	Delete(context.Context, string, string) error
+	SpectateAccount(context.Context, string, string, string) (room.JoinResult, error)
+	Participation(context.Context, string, string, bool) (room.View, error)
+	VoteRematch(context.Context, string, string, room.RematchRequest) (room.View, error)
+	Leave(context.Context, string, string) error
 }
 
 type Config struct {
@@ -69,6 +73,10 @@ func New(rooms Rooms, cfg Config) (http.Handler, error) {
 	mux.HandleFunc("/api/v1/avatars/{digest}", h.only("GET", h.avatar))
 	mux.HandleFunc("/api/v1/rooms", h.only("POST", h.authenticated(h.create)))
 	mux.HandleFunc("/api/v1/solo", h.only("POST", h.authenticated(h.solo)))
+	mux.HandleFunc("/api/v1/rooms/{room}/leave", h.only("POST", h.authenticated(h.leave)))
+	mux.HandleFunc("/api/v1/rooms/{room}/spectators", h.only("POST", h.authenticated(h.spectators)))
+	mux.HandleFunc("/api/v1/rooms/{room}/participation", h.only("POST", h.authenticated(h.participation)))
+	mux.HandleFunc("/api/v1/rooms/{room}/rematch", h.only("POST", h.authenticated(h.rematch)))
 	mux.HandleFunc("/api/v1/rooms/{room}/players", h.only("POST", h.authenticated(h.join)))
 	mux.HandleFunc("/api/v1/rooms/{room}", h.authenticated(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

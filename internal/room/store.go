@@ -29,16 +29,22 @@ var (
 // Record is owned by Store. It must only be accessed inside a callback, and must
 // never be used as an HTTP response. Session keys are SHA-256 token digests.
 type Record struct {
-	Game      *game.Game
-	HostID    game.PlayerID
-	Sessions  map[[32]byte]game.PlayerID
-	Accounts  map[string]game.PlayerID
-	Rules     []game.RuleSpec
-	CreatedAt time.Time
-	Bots      map[game.PlayerID]bot.Profile
-	BotMemory bot.Memory
-	BotTurnAt time.Time
-	BotUNO    map[game.PlayerID]BotUNO
+	RosterVersion uint64
+	Departed      map[game.PlayerID]bool
+	Game          *game.Game
+	HostID        game.PlayerID
+	Sessions      map[[32]byte]game.PlayerID
+	Accounts      map[string]game.PlayerID
+	Rules         []game.RuleSpec
+	CreatedAt     time.Time
+	Bots          map[game.PlayerID]bot.Profile
+	BotMemory     bot.Memory
+	BotTurnAt     time.Time
+	BotUNO        map[game.PlayerID]BotUNO
+	Spectators    []Spectator
+	RematchVotes  map[game.PlayerID]bool
+	Round         uint64
+	Revision      uint64
 }
 
 // Store serializes write callbacks for a room within this process. The callback

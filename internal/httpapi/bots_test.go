@@ -34,7 +34,10 @@ func TestHTTPSoloStartsConfiguredPrivateGameAndRestrictsRecovery(t *testing.T) {
 			t.Fatalf("private AI state exposed: %s", forbidden)
 		}
 	}
-	decode[map[string]any](t, c.request("POST", "/api/v1/rooms/"+joined.Room.ID+"/players", c.bob, `{}`), 403)
+	guest := decode[room.JoinResult](t, c.request("POST", "/api/v1/rooms/"+joined.Room.ID+"/players", c.bob, `{}`), 201)
+	if guest.Room.Role != "spectator" {
+		t.Fatal("midgame guest not spectating")
+	}
 	again := decode[room.JoinResult](t, c.request("POST", "/api/v1/rooms/"+joined.Room.ID+"/players", c.alice, `{}`), 201)
 	if again.PlayerID != joined.PlayerID || len(again.Room.State.Players) != 3 {
 		t.Fatal("recovery added a duplicate seat")

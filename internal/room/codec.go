@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"unour/game"
 	"unour/internal/bot"
@@ -35,6 +38,12 @@ func NewCodec(rules RuleBuilder, shuffle game.ShuffleFunc) RecordCodec {
 }
 
 type recordSnapshot struct {
+	RosterVersion uint64                        `json:"roster_version,omitempty"`
+	Departed      map[game.PlayerID]bool        `json:"departed,omitempty"`
+	Spectators    []Spectator                   `json:"spectators,omitempty"`
+	RematchVotes  map[game.PlayerID]bool        `json:"rematch_votes,omitempty"`
+	Round         uint64                        `json:"round,omitempty"`
+	Revision      uint64                        `json:"revision,omitempty"`
 	FormatVersion int                           `json:"format_version"`
 	Game          game.Checkpoint               `json:"game"`
 	HostID        game.PlayerID                 `json:"host_id"`
@@ -53,6 +62,9 @@ func (c *codec) Encode(r *Record) ([]byte, error) {
 		return nil, fmt.Errorf("cannot persist a room without a game")
 	}
 	s := recordSnapshot{FormatVersion: 1, Game: r.Game.Checkpoint(), HostID: r.HostID, Sessions: make(map[string]game.PlayerID, len(r.Sessions)), Accounts: r.Accounts, Rules: copySpecs(r.Rules), CreatedAt: r.CreatedAt}
+	s.RosterVersion = r.RosterVersion
+	s.Departed = r.Departed
+	s.Spectators, s.RematchVotes, s.Round, s.Revision = r.Spectators, r.RematchVotes, r.Round, r.Revision
 	s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO = r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO
 	for digest, id := range r.Sessions {
 		s.Sessions[hex.EncodeToString(digest[:])] = id
@@ -107,6 +119,9 @@ func (c *codec) Decode(data []byte) (*Record, error) {
 		return nil, fmt.Errorf("restore game: %w", err)
 	}
 	r := &Record{Game: g, HostID: s.HostID, Sessions: make(map[[32]byte]game.PlayerID, len(s.Sessions)), Accounts: s.Accounts, Rules: copySpecs(s.Rules), CreatedAt: s.CreatedAt}
+	r.RosterVersion = s.RosterVersion
+	r.Departed = s.Departed
+	r.Spectators, r.RematchVotes, r.Round, r.Revision = s.Spectators, s.RematchVotes, s.Round, s.Revision
 	r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO = s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO
 	for text, id := range s.Sessions {
 		raw, _ := hex.DecodeString(text)
@@ -122,21 +137,60 @@ func validateRecord(s recordSnapshot) error {
 		return fmt.Errorf("room creation time is missing")
 	}
 	players := s.Game.Players
-	if len(players) != len(s.Sessions)+len(s.Bots) {
+	if len(players)+len(s.Spectators)-len(s.Departed) != len(s.Sessions)+len(s.Bots) {
 		return fmt.Errorf("room session count differs from player count")
-	}
-	if (len(players) == 0 && s.HostID != "") || (len(players) > 0 && s.HostID != players[0].ID) {
-		return fmt.Errorf("room host differs from first player")
 	}
 	ids := make(map[game.PlayerID]bool, len(players))
 	for _, p := range players {
 		ids[p.ID] = true
 	}
-	assigned := make(map[game.PlayerID]bool, len(players))
+	if len(s.Spectators) > 50 || s.Round == ^uint64(0) || s.Revision > ^uint64(0)-s.Game.Version {
+		return fmt.Errorf("invalid room lifecycle counters")
+	}
+	queued := 0
+	eligible := make(map[game.PlayerID]bool)
+	for _, p := range players {
+		eligible[p.ID] = !s.Departed[p.ID]
+	}
+	for _, p := range s.Spectators {
+		if p.ID == "" || len(p.ID) > 64 || ids[p.ID] || p.Name == "" || p.Name != strings.TrimSpace(p.Name) || !utf8.ValidString(p.Name) || utf8.RuneCountInString(p.Name) > 64 || strings.IndexFunc(p.Name, unicode.IsControl) >= 0 {
+			return fmt.Errorf("invalid spectator identity")
+		}
+		ids[p.ID] = true
+		if p.NextRound {
+			queued++
+			eligible[p.ID] = true
+		}
+	}
+	if len(players)-len(s.Departed)+queued > s.Game.MaxPlayers {
+		return fmt.Errorf("next round exceeds capacity")
+	}
+	for id, agree := range s.RematchVotes {
+		_, computer := s.Bots[id]
+		if !agree || !eligible[id] || computer || s.Game.Phase != game.Finished {
+			return fmt.Errorf("invalid rematch vote")
+		}
+	}
+	for id, left := range s.Departed {
+		_, computer := s.Bots[id]
+		found := false
+		for _, p := range players {
+			if p.ID == id {
+				found = true
+				if s.Game.Phase == game.Playing && !p.Eliminated {
+					return fmt.Errorf("departed active player")
+				}
+			}
+		}
+		if !left || !found || computer || s.Game.Phase == game.Lobby {
+			return fmt.Errorf("invalid departed seat")
+		}
+	}
+	assigned := make(map[game.PlayerID]bool, len(ids))
 	accountSeats := make(map[game.PlayerID]bool, len(s.Accounts))
 	for accountID, playerID := range s.Accounts {
 		_, computer := s.Bots[playerID]
-		if !validID(accountID) || !ids[playerID] || accountSeats[playerID] || computer {
+		if !validID(accountID) || !ids[playerID] || accountSeats[playerID] || computer || s.Departed[playerID] {
 			return fmt.Errorf("invalid account seat mapping")
 		}
 		accountSeats[playerID] = true
@@ -145,7 +199,7 @@ func validateRecord(s recordSnapshot) error {
 	for text, id := range s.Sessions {
 		raw, err := hex.DecodeString(text)
 		_, computer := s.Bots[id]
-		if err != nil || len(raw) != 32 || !ids[id] || assigned[id] || computer {
+		if err != nil || len(raw) != 32 || !ids[id] || assigned[id] || computer || s.Departed[id] {
 			return fmt.Errorf("invalid room session mapping")
 		}
 		var digest [32]byte
@@ -156,7 +210,18 @@ func validateRecord(s recordSnapshot) error {
 		hashes[digest] = true
 		assigned[id] = true
 	}
-	if err := validateBots(s, ids); err != nil {
+	if len(s.Sessions) == 0 {
+		if s.HostID != "" {
+			return fmt.Errorf("host without session")
+		}
+	} else if !assigned[s.HostID] {
+		return fmt.Errorf("host has no human session")
+	}
+	gameIDs := make(map[game.PlayerID]bool, len(players))
+	for _, p := range players {
+		gameIDs[p.ID] = true
+	}
+	if err := validateBots(s, gameIDs); err != nil {
 		return err
 	}
 	return nil
@@ -174,9 +239,7 @@ func validateBots(s recordSnapshot, players map[game.PlayerID]bool) error {
 		}
 		return nil
 	}
-	if len(s.Accounts) != 1 || len(s.Sessions) != 1 {
-		return fmt.Errorf("solo table requires one account and one human session")
-	}
+
 	if len(s.BotMemory.Discard) != len(s.Game.Discard) {
 		return fmt.Errorf("public discard memory differs from game")
 	}
