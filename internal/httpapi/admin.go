@@ -52,6 +52,10 @@ func (h *handler) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/admin/rooms/batch/delete", h.only("POST", h.adminOnly(h.adminDeleteRooms)))
 	mux.HandleFunc("/api/v1/admin/rooms/{room}/access", h.only("PUT", h.adminOnly(h.adminRoomAccess)))
 	mux.HandleFunc("/api/v1/admin/rooms/{room}/members/{player}/kick", h.only("POST", h.adminOnly(h.adminKickMember)))
+	mux.HandleFunc("/api/v1/admin/rooms/{room}/bots/{player}/control", h.adminOnly(h.adminBotControl))
+	for suffix, action := range map[string]game.Action{"play": game.Play, "draw": game.Draw, "pass": game.Pass, "challenge": game.Challenge, "uno": game.SayUNO, "uno-penalty": game.PenalizeUNO} {
+		mux.HandleFunc("/api/v1/admin/rooms/{room}/bots/{player}/"+suffix, h.only("POST", h.adminOnly(h.adminBotAction(action))))
+	}
 	mux.HandleFunc("/api/v1/admin/audit", h.only("GET", h.adminOnly(h.adminAudit)))
 }
 func (h *handler) adminSetCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {

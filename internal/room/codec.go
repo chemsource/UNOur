@@ -37,24 +37,26 @@ func NewCodec(shuffle game.ShuffleFunc) RecordCodec {
 }
 
 type recordSnapshot struct {
-	JoinLocked    bool                          `json:"join_locked,omitempty"`
-	RosterVersion uint64                        `json:"roster_version,omitempty"`
-	Departed      map[game.PlayerID]bool        `json:"departed,omitempty"`
-	Spectators    []Spectator                   `json:"spectators,omitempty"`
-	RematchVotes  map[game.PlayerID]bool        `json:"rematch_votes,omitempty"`
-	Round         uint64                        `json:"round,omitempty"`
-	Revision      uint64                        `json:"revision,omitempty"`
-	FormatVersion int                           `json:"format_version"`
-	Game          game.Checkpoint               `json:"game"`
-	HostID        game.PlayerID                 `json:"host_id"`
-	Sessions      map[string]game.PlayerID      `json:"session_digests"`
-	Accounts      map[string]game.PlayerID      `json:"accounts,omitempty"`
-	Rules         []game.RuleSpec               `json:"rules"`
-	CreatedAt     time.Time                     `json:"created_at"`
-	Bots          map[game.PlayerID]bot.Profile `json:"bots,omitempty"`
-	BotMemory     bot.Memory                    `json:"bot_memory,omitzero"`
-	BotTurnAt     time.Time                     `json:"bot_turn_at,omitzero"`
-	BotUNO        map[game.PlayerID]BotUNO      `json:"bot_uno,omitempty"`
+	JoinLocked      bool                          `json:"join_locked,omitempty"`
+	RosterVersion   uint64                        `json:"roster_version,omitempty"`
+	Departed        map[game.PlayerID]bool        `json:"departed,omitempty"`
+	Spectators      []Spectator                   `json:"spectators,omitempty"`
+	RematchVotes    map[game.PlayerID]bool        `json:"rematch_votes,omitempty"`
+	Round           uint64                        `json:"round,omitempty"`
+	Revision        uint64                        `json:"revision,omitempty"`
+	FormatVersion   int                           `json:"format_version"`
+	Game            game.Checkpoint               `json:"game"`
+	HostID          game.PlayerID                 `json:"host_id"`
+	Sessions        map[string]game.PlayerID      `json:"session_digests"`
+	Accounts        map[string]game.PlayerID      `json:"accounts,omitempty"`
+	Rules           []game.RuleSpec               `json:"rules"`
+	CreatedAt       time.Time                     `json:"created_at"`
+	Bots            map[game.PlayerID]bot.Profile `json:"bots,omitempty"`
+	BotMemory       bot.Memory                    `json:"bot_memory,omitzero"`
+	BotTurnAt       time.Time                     `json:"bot_turn_at,omitzero"`
+	BotUNO          map[game.PlayerID]BotUNO      `json:"bot_uno,omitempty"`
+	BotControls     map[game.PlayerID]botControl  `json:"bot_controls,omitempty"`
+	BotControlEpoch uint64                        `json:"bot_control_epoch,omitempty"`
 }
 
 func (c *codec) Encode(r *Record) ([]byte, error) {
@@ -67,6 +69,7 @@ func (c *codec) Encode(r *Record) ([]byte, error) {
 	s.Departed = r.Departed
 	s.Spectators, s.RematchVotes, s.Round, s.Revision = r.Spectators, r.RematchVotes, r.Round, r.Revision
 	s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO = r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO
+	s.BotControls, s.BotControlEpoch = r.botControls, r.botControlEpoch
 	for digest, id := range r.Sessions {
 		s.Sessions[hex.EncodeToString(digest[:])] = id
 	}
@@ -125,6 +128,7 @@ func (c *codec) Decode(data []byte) (*Record, error) {
 	r.Departed = s.Departed
 	r.Spectators, r.RematchVotes, r.Round, r.Revision = s.Spectators, s.RematchVotes, s.Round, s.Revision
 	r.Bots, r.BotMemory, r.BotTurnAt, r.BotUNO = s.Bots, s.BotMemory, s.BotTurnAt, s.BotUNO
+	r.botControls, r.botControlEpoch = s.BotControls, s.BotControlEpoch
 	for text, id := range s.Sessions {
 		raw, _ := hex.DecodeString(text)
 		var digest [32]byte
@@ -230,6 +234,11 @@ func validateRecord(s recordSnapshot) error {
 }
 
 func validateBots(s recordSnapshot, players map[game.PlayerID]bool) error {
+	for id, lease := range s.BotControls {
+		if _, ok := s.Bots[id]; !ok || !validControlIdentity(lease.ID) || !validControlIdentity(lease.Owner) || lease.ExpiresAt.IsZero() || s.BotControlEpoch == 0 {
+			return fmt.Errorf("invalid private bot control lease")
+		}
+	}
 	for id, profile := range s.Bots {
 		if !players[id] || id == s.HostID || !profile.Difficulty.Valid() || !profile.Style.Valid() {
 			return fmt.Errorf("invalid computer seat")

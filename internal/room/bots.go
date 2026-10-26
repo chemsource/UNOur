@@ -28,13 +28,14 @@ type BotUNO struct {
 // BotTask is detached and contains only this computer's private view. An empty
 // Type requests a decision; UNO actions have their own independent schedule.
 type BotTask struct {
-	PlayerID    game.PlayerID
-	Version     uint64
-	DueAt       time.Time
-	Type        game.Action
-	WindowID    uint64
-	Profile     bot.Profile
-	Observation bot.Observation
+	ControlEpoch uint64
+	PlayerID     game.PlayerID
+	Version      uint64
+	DueAt        time.Time
+	Type         game.Action
+	WindowID     uint64
+	Profile      bot.Profile
+	Observation  bot.Observation
 }
 
 func (s *Service) CreateSolo(ctx context.Context, accountID, name string, req SoloRequest) (JoinResult, error) {
@@ -131,11 +132,19 @@ func (s *Service) observeBots(r *Record, before game.View, cmd game.Command, eve
 		if r.BotUNO[p.ID].WindowID == p.UNO.ID {
 			continue
 		}
+		if botControlled(r, p.ID, cmd.At) {
+			r.BotUNO[p.ID] = BotUNO{WindowID: p.UNO.ID, At: p.UNO.Deadline.Add(100 * time.Millisecond)}
+			continue
+		}
 		forget := map[bot.Difficulty]float64{bot.Easy: 0.12, bot.Normal: 0.04, bot.Hard: 0.01, bot.Expert: 0}[profile.Difficulty]
 		declare := s.random() >= forget
 		at := p.UNO.Deadline.Add(100 * time.Millisecond)
 		if declare {
 			at = cmd.At.Add(450*time.Millisecond + time.Duration(s.random()*650*float64(time.Millisecond)))
+			if !at.Before(p.UNO.Deadline) {
+				declare = false
+				at = p.UNO.Deadline.Add(100 * time.Millisecond)
+			}
 		}
 		r.BotUNO[p.ID] = BotUNO{WindowID: p.UNO.ID, At: at, Declare: declare}
 	}
@@ -147,6 +156,9 @@ func NextBotAt(r *Record) time.Time {
 		return time.Time{}
 	}
 	at := r.BotTurnAt
+	if lease, ok := r.botControls[r.Game.View("").Turn]; ok && !at.IsZero() && at.Before(lease.ExpiresAt) {
+		at = lease.ExpiresAt
+	}
 	for _, uno := range r.BotUNO {
 		if at.IsZero() || uno.At.Before(at) {
 			at = uno.At
@@ -161,7 +173,7 @@ func nextBotTask(r *Record, now time.Time) *BotTask {
 		return nil
 	}
 	var task *BotTask
-	if profile, computer := r.Bots[v.Turn]; computer && !r.BotTurnAt.IsZero() && !r.BotTurnAt.After(now) {
+	if profile, computer := r.Bots[v.Turn]; computer && !botControlled(r, v.Turn, now) && !r.BotTurnAt.IsZero() && !r.BotTurnAt.After(now) {
 		task = &BotTask{PlayerID: v.Turn, Version: v.Version, DueAt: r.BotTurnAt, Profile: profile}
 	}
 	for _, p := range v.Players {
@@ -181,6 +193,9 @@ func nextBotTask(r *Record, now time.Time) *BotTask {
 	if task != nil && task.Type == "" {
 		task.Observation = bot.Observation{View: r.Game.View(task.PlayerID), Memory: r.BotMemory.Clone(), Rules: copySpecs(r.Rules), RuleModules: r.Game.RuleModules()}
 	}
+	if task != nil {
+		task.ControlEpoch = r.botControlEpoch
+	}
 	return task
 }
 
@@ -197,7 +212,7 @@ func (s *Service) NextBotTask(ctx context.Context, roomID string) (*BotTask, err
 // storage locks, and a changed version rejects the entire old result.
 func (s *Service) ApplyBot(ctx context.Context, roomID string, task BotTask, cmd game.Command) error {
 	return s.store.Transact(ctx, roomID, func(r *Record) error {
-		if r.Game.View("").Version != task.Version {
+		if r.Game.View("").Version != task.Version || r.botControlEpoch != task.ControlEpoch {
 			return ErrConflict
 		}
 		current := nextBotTask(r, s.now().UTC())
@@ -233,7 +248,7 @@ func (s *Service) RetryBot(ctx context.Context, roomID string, task BotTask, del
 		return &game.Error{Code: game.InvalidInput, Message: "computer retry delay must be 100ms–5s"}
 	}
 	return s.store.Transact(ctx, roomID, func(r *Record) error {
-		if r.Game.View("").Version != task.Version {
+		if r.Game.View("").Version != task.Version || r.botControlEpoch != task.ControlEpoch {
 			return ErrConflict
 		}
 		current := nextBotTask(r, s.now().UTC())

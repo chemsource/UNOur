@@ -63,13 +63,13 @@ func (h *handler) middleware(next http.Handler) http.Handler {
 				}
 				for _, header := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 					header = strings.ToLower(strings.TrimSpace(header))
-					if header != "" && header != "authorization" && header != "content-type" && header != "x-account-id" && header != "x-admin-csrf" {
+					if header != "" && header != "authorization" && header != "content-type" && header != "x-account-id" && header != "x-admin-csrf" && header != "x-bot-control" {
 						h.problem(rw, 403, "header_not_allowed", "preflight header is not allowed")
 						return
 					}
 				}
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Account-ID, X-Admin-CSRF")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Account-ID, X-Admin-CSRF, X-Bot-Control")
 				w.Header().Set("Access-Control-Max-Age", "600")
 				rw.WriteHeader(204)
 				return
