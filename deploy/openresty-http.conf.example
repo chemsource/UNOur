@@ -2,7 +2,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name csac.chat 203.0.113.10;
+    server_name uno.csac.chat 203.0.113.10;
 
     location ^~ /.well-known/acme-challenge/ {
         root /www/sites/unour/acme;

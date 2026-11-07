@@ -2,7 +2,7 @@
 set -eu
 
 site_dir=${UNOUR_SITE_DIR:-/opt/1panel/www/sites/unour}
-certificate="$site_dir/letsencrypt/live/csac.chat/fullchain.pem"
+certificate="$site_dir/letsencrypt/live/uno.csac.chat/fullchain.pem"
 state_file="$site_dir/letsencrypt/.unour-loaded-sha256"
 exec 9>/run/lock/unour-certificate.lock
 flock -n 9 || exit 0
@@ -15,7 +15,9 @@ renew_status=0
 docker run --rm --name unour-certbot \
     --volume "$site_dir/acme:/var/www/acme" \
     --volume "$site_dir/letsencrypt:/etc/letsencrypt" \
-    certbot/certbot:v5.8.0 renew --quiet "$@" || renew_status=$?
+    certbot/certbot:v5.8.0 renew --quiet --cert-name uno.csac.chat \
+    --webroot --webroot-path /var/www/acme --preferred-challenges http \
+    "$@" || renew_status=$?
 
 fingerprint=$(sha256sum "$certificate")
 fingerprint=${fingerprint%% *}

@@ -3,23 +3,23 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name csac.chat 203.0.113.10;
+    server_name uno.csac.chat 203.0.113.10;
 
     location ^~ /.well-known/acme-challenge/ {
         root /www/sites/unour/acme;
         default_type text/plain;
         try_files $uri =404;
     }
-    location / { return 308 https://csac.chat$request_uri; }
+    location / { return 308 https://uno.csac.chat$request_uri; }
 }
 
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    server_name csac.chat;
+    server_name uno.csac.chat;
     http2 on;
-    ssl_certificate /www/sites/unour/letsencrypt/live/csac.chat/fullchain.pem;
-    ssl_certificate_key /www/sites/unour/letsencrypt/live/csac.chat/privkey.pem;
+    ssl_certificate /www/sites/unour/letsencrypt/live/uno.csac.chat/fullchain.pem;
+    ssl_certificate_key /www/sites/unour/letsencrypt/live/uno.csac.chat/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:UNOurTLS:10m;
     ssl_session_timeout 1d;

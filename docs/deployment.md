@@ -5,8 +5,8 @@
 前端与后端保留两个 Git 项目，服务器目录分别是 `/opt/unour/unour` 和 `/opt/unour/unour-web`。后端根目录的 `compose.yaml` 管理两个容器；现有 1Panel OpenResty 负责 HTTPS，再代理到 `127.0.0.1:18080`。
 
 ```text
-https://csac.chat → OpenResty :443 → web :8080 → api :8088 → SQLite
-http://203.0.113.10 → https://csac.chat
+https://uno.csac.chat → OpenResty :443 → web :8080 → api :8088 → SQLite
+http://203.0.113.10 → https://uno.csac.chat
 ```
 
 ## 启动与更新
@@ -38,7 +38,7 @@ Compose 的 `UNO_TRUSTED_PROXIES` 只信任隔离 Docker 网络的私网代理�
 - 前端检出后端 main，实际启动 Go + 临时 SQLite，执行类型检查、测试、格式检查、生产构建和 Docker 构建。
 - 检查失败不发布。两仓独立更新各自镜像，共用服务器发布锁，避免互相覆盖；成功发布的 workflow run number 阻止旧任务覆盖新版本。
 
-每仓配置 `UNOUR_DEPLOY_HOST`、`UNOUR_DEPLOY_KEY`、`UNOUR_KNOWN_HOSTS` 三个 Actions Secrets，分别保存服务器地址、组件专用 Ed25519 私钥和经过已验证 SSH 连接取得的服务器主机公钥。工作流不写服务器 IP。连接以专用 `unour-deploy` 用户强制校验主机密钥，不使用服务器密码。公钥使用 `restrict,command="sudo -n /usr/local/sbin/unour-ci-receive api"` 或 `web`，不能获得交互 shell、端口转发或发布另一个组件。
+每仓配置 `UNOUR_DEPLOY_HOST`、`UNOUR_DEPLOY_KEY`、`UNOUR_KNOWN_HOSTS` 三个 Actions Secrets，分别保存服务器地址、组件专用 Ed25519 私钥和经过已验证 SSH 连接取得的服务器主机公钥。工作流不写服务器 IP。部署完成后，CI 使用 Secret 中的服务器地址连接源站，以 `uno.csac.chat` 作为 HTTPS 域名校验证书并检查 `/healthz`，不依赖公网 DNS 切换或 Cloudflare 缓存。连接以专用 `unour-deploy` 用户强制校验主机密钥，不使用服务器密码。公钥使用 `restrict,command="sudo -n /usr/local/sbin/unour-ci-receive api"` 或 `web`，不能获得交互 shell、端口转发或发布另一个组件。
 
 接收程序验证命令、上传大小及 SHA256，再载入镜像、备份 SQLite、原子更新 `.env` 对应版本，等待容器和应用健康。失败时恢复之前的镜像并返回错误。旧镜像和备份保留；数据库不自动恢复旧备份，数据库升级应向前、向后兼容。构建和测试均运行在 GitHub 托管 runner 上。
 
@@ -83,7 +83,7 @@ OPENRESTY_CONTAINER=$(docker ps -q --filter label=com.docker.compose.service=ope
 docker exec "$OPENRESTY_CONTAINER" nginx -t
 docker exec "$OPENRESTY_CONTAINER" nginx -s reload
 printf 'unour-acme-check\n' > /opt/1panel/www/sites/unour/acme/.well-known/acme-challenge/unour-probe
-curl --fail http://csac.chat/.well-known/acme-challenge/unour-probe
+curl --fail http://uno.csac.chat/.well-known/acme-challenge/unour-probe
 rm /opt/1panel/www/sites/unour/acme/.well-known/acme-challenge/unour-probe
 ```
 
@@ -95,13 +95,13 @@ docker run --rm --name unour-certbot \
   --volume /opt/1panel/www/sites/unour/letsencrypt:/etc/letsencrypt \
   certbot/certbot:v5.8.0 certonly --non-interactive \
   --agree-tos --register-unsafely-without-email \
-  --webroot --webroot-path /var/www/acme --cert-name csac.chat -d csac.chat
+  --webroot --webroot-path /var/www/acme --cert-name uno.csac.chat -d uno.csac.chat
 python3 deploy/update-cloudflare-ips.py
 cp deploy/openresty.conf.example /opt/1panel/www/conf.d/unour.conf
 docker exec "$OPENRESTY_CONTAINER" nginx -t
 docker exec "$OPENRESTY_CONTAINER" nginx -s reload
-curl --fail --resolve csac.chat:443:127.0.0.1 https://csac.chat/healthz
-curl --fail https://csac.chat/healthz
+curl --fail --resolve uno.csac.chat:443:127.0.0.1 https://uno.csac.chat/healthz
+curl --fail https://uno.csac.chat/healthz
 install -m 0644 deploy/unour-certificate.service deploy/unour-certificate.timer /etc/systemd/system/
 systemctl daemon-reload
 sh deploy/renew-certificate.sh --dry-run
@@ -112,16 +112,22 @@ systemctl enable --now unour-certificate.timer
 
 `update-cloudflare-ips.py` 从 Cloudflare 官方公开 API 读取 IPv4、IPv6 网段，校验 CIDR 后原子写入 `cloudflare-realip.conf`，仅信任这些来源提供的 `CF-Connecting-IP`。原始 IP 请求不信任该头。定期更新网段或调整代理时，重新运行该脚本，并在 `nginx -t` 成功后重载 OpenResty。
 
+### 从其他域名迁移
+
+为新域名单独签发 `uno.csac.chat` 证书，保留原域名的证书和私钥，供其他服务独立使用。修改服务器 `.env` 的 `UNOUR_ORIGINS` 后，使用 `docker compose up -d --no-build --no-deps --wait api` 重新创建 API 容器；只重启容器不会更新环境变量。同步 OpenResty 站点匹配、证书引用、HTTP 跳转及两仓 CI 健康检查域名。
+
+如果需要先完成服务器配置再切业务解析，可通过 DNS-01 临时 TXT 验证签发新证书，签发后清理本次验证记录。业务解析切换后，新域名的 80 端口验证路径必须可访问，再运行 `sh deploy/renew-certificate.sh --dry-run` 验证 HTTP-01 续期。脚本显式选择 webroot 验证，首次使用手动 DNS 签发也不会让自动续期停在交互提示中。旧域名证书应由它的新服务配置续期。
+
 ### 续期与目录
 
 Let’s Encrypt 使用 HTTP-01 webroot，持久化目录为：
 
 - 验证文件：`/opt/1panel/www/sites/unour/acme`
 - ACME 账户、证书和私钥：`/opt/1panel/www/sites/unour/letsencrypt`
-- 有效证书：`letsencrypt/live/csac.chat/fullchain.pem`
-- 私钥：`letsencrypt/live/csac.chat/privkey.pem`
+- 有效证书：`letsencrypt/live/uno.csac.chat/fullchain.pem`
+- 私钥：`letsencrypt/live/uno.csac.chat/privkey.pem`
 
-证书由 Certbot 和 `unour-certificate.timer` 管理，不依赖面板证书列表。定时器每天检查两次，更新后校验 OpenResty 配置并平滑重载。脚本只在重载成功后记录已加载证书的指纹；重载失败会返回错误，下次运行会继续尝试，证书没有变化且已经加载时不重载。站点应持续保留 HTTP 验证路径。
+UNOur 续期脚本只选择 `uno.csac.chat` 证书，并显式使用 HTTP-01 webroot，不续期或修改其他服务的证书。证书由 Certbot 和 `unour-certificate.timer` 管理，不依赖面板证书列表。定时器每天检查两次，更新后校验 OpenResty 配置并平滑重载。脚本只在重载成功后记录已加载证书的指纹；重载失败会返回错误，下次运行会继续尝试，证书没有变化且已经加载时不重载。站点应持续保留 HTTP 验证路径。
 
 ```sh
 systemctl list-timers unour-certificate.timer

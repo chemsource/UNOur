@@ -63,4 +63,6 @@ jobs:
             "deploy $GITHUB_SHA $GITHUB_RUN_NUMBER $GITHUB_RUN_ATTEMPT $digest" \
             < "$directory/image.tar.gz"
           curl --fail --retry 5 --retry-all-errors --retry-delay 2 \
-            --max-time 15 --user-agent 'UNOur-CI/1.0' https://csac.chat/healthz
+            --max-time 15 --user-agent 'UNOur-CI/1.0' \
+            --connect-to "uno.csac.chat:443:$UNOUR_DEPLOY_HOST:443" \
+            https://uno.csac.chat/healthz
